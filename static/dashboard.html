@@ -39,12 +39,27 @@
     .tag-gradient { background: linear-gradient(135deg, #667eea, #764ba2); color: white; }
     .tag-leave { background: linear-gradient(135deg, #333, #555); color: white; }
     
-    /* 甘特图容器 - 重新设计以解决对齐问题 */
-    .gantt-wrapper { overflow-x: auto; background: white; border-radius: 14px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+    /* 甘特图容器 - 内部滚动模式 */
+    .gantt-wrapper {
+      background: white;
+      border-radius: 14px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+      overflow: auto;
+      max-height: calc(100vh - 180px);
+    }
     .gantt { display: flex; min-width: 900px; position: relative; }
-    
-    /* 左侧区域 */
-    .gantt-left { width: 220px; min-width: 220px; border-right: 2px solid #e8e8e8; background: linear-gradient(180deg, #fafafa, #f5f5f5); position: sticky; left: 0; z-index: 10; }
+
+    /* 左侧区域 - 垂直滚动时固定左侧 */
+    .gantt-left {
+      width: 220px;
+      min-width: 220px;
+      border-right: 2px solid #e8e8e8;
+      background: linear-gradient(180deg, #fafafa, #f5f5f5);
+      position: sticky;
+      left: 0;
+      z-index: 10;
+      flex-shrink: 0;
+    }
     .gantt-left-header { height: 60px; display: flex; align-items: center; padding: 0 16px; font-weight: 600; background: linear-gradient(180deg, #f8f9ff, #f0f5ff); border-bottom: 2px solid #e8e8e8; color: #555; font-size: 14px; }
     .gantt-row-label { height: 42px; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid #f0f0f0; font-size: 13px; transition: background 0.2s; background: inherit; }
     .gantt-row-label:hover { background: rgba(102,126,234,0.05); }
@@ -53,7 +68,7 @@
     .row-dot { width: 10px; height: 10px; border-radius: 3px; margin-right: 10px; flex-shrink: 0; }
     
     /* 右侧区域 */
-    .gantt-right { flex: 1; position: relative; }
+    .gantt-right { flex: 1; display: flex; flex-direction: column; min-width: 0; }
     
     /* 日期头部 - 固定在顶部 */
     .gantt-dates { display: flex; height: 60px; background: linear-gradient(180deg, #f8f9ff, #f0f5ff); border-bottom: 2px solid #e8e8e8; position: sticky; top: 0; z-index: 5; }
@@ -185,7 +200,7 @@
     <ul class="nav-menu">
       <li class="nav-item active">前台看板</li>
       <li class="nav-item" onclick="location.href='/admin.html'">后台管理</li>
-      <li class="nav-item" onclick="location.href='/tv.html'">电视展示板</li>
+      <li class="nav-item" onclick="location.href='/tv.html'">电视看板</li>
     </ul>
   </nav>
 
@@ -772,7 +787,7 @@
               chipIcon = '';
             }
 
-            html += `<div class="person-chip ${chipClass}" style="${chipStyle}" ${leaveTip} draggable="true" data-person="${p.id}" data-is-leave="${isCurrentlyOnLeave}">${p.name}${chipIcon}</div>`;
+            html += `<div class="person-chip ${chipClass}" style="${chipStyle}" ${leaveTip} draggable="true" data-person="${p.id}" data-is-leave="${isCurrentlyOnLeave}" onmouseenter="highlightPersonBars('${p.id}')" onmouseleave="clearAllHighlights()">${p.name}${chipIcon}</div>`;
           });
         }
         
