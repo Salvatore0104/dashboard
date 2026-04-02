@@ -11,8 +11,9 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; }
 
-    /* 导航栏 */
-    .navbar { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); padding: 0 24px; display: flex; justify-content: space-between; align-items: center; height: 64px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); position: sticky; top: 0; z-index: 100; }
+    /* 导航栏 - TV模式自动隐藏 */
+    .navbar { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); padding: 0 24px; display: flex; justify-content: space-between; align-items: center; height: 64px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); position: fixed; top: 0; left: 0; right: 0; z-index: 100; transition: transform 0.3s ease; }
+    .navbar.hidden { transform: translateY(-100%); }
     .navbar h1 { color: #333; font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
     .navbar h1 .logo { width: 36px; height: 36px; background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-size: 18px; font-weight: bold; }
     .nav-menu { display: flex; list-style: none; gap: 8px; }
@@ -20,7 +21,7 @@
     .nav-item:hover, .nav-item.active { color: white; background: linear-gradient(135deg, #667eea, #764ba2); }
 
     /* 主容器 */
-    .main-container { padding: 24px; max-width: 1800px; margin: 0 auto; }
+    .main-container { padding: 24px; padding-top: 88px; margin: 0 auto; }
 
     /* 工具栏 */
     .toolbar { background: white; padding: 16px 20px; border-radius: 14px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
@@ -31,9 +32,9 @@
     .tag-gradient { background: linear-gradient(135deg, #667eea, #764ba2); color: white; }
     .tag-leave { background: linear-gradient(135deg, #333, #555); color: white; }
 
-    /* 甘特图容器 */
-    .gantt-wrapper { background: white; border-radius: 14px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); overflow: hidden; }
-    .gantt { display: flex; position: relative; }
+    /* 甘特图容器 - 内部滚动模式 */
+    .gantt-wrapper { background: white; border-radius: 14px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); overflow: auto; max-height: calc(100vh - 180px); }
+    .gantt { display: flex; min-width: 900px; position: relative; }
 
     /* 左侧区域 */
     .gantt-left { width: 220px; min-width: 220px; border-right: 2px solid #e8e8e8; background: linear-gradient(180deg, #fafafa, #f5f5f5); position: sticky; left: 0; z-index: 10; }
@@ -75,6 +76,11 @@
     .empty a { color: #667eea; text-decoration: none; font-weight: 500; }
     .empty a:hover { text-decoration: underline; }
 
+    /* 折叠按钮 */
+    .toggle-btn { background: white; border: 1px solid #e8e8e8; border-radius: 8px; padding: 8px 14px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 13px; color: #666; transition: all 0.2s; font-weight: 500; }
+    .toggle-btn:hover { background: linear-gradient(135deg, #667eea, #764ba2); color: white; border-color: #667eea; }
+    .toggle-btn.active { background: linear-gradient(135deg, #667eea, #764ba2); color: white; border-color: #667eea; }
+
     /* 响应式 */
     @media (max-width: 768px) {
       .main-container { padding: 16px; }
@@ -103,7 +109,13 @@
         <span>&#128197;</span> 项目排期
         <span class="tag tag-gradient" id="todayTag"></span>
       </h2>
-      <div id="updateTime" style="font-size:13px;color:#999;">TV 模式 - 只读视图</div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="toggle-btn" id="togglePersonBtn" onclick="togglePersons()">
+          <span id="togglePersonIcon">&#9660;</span>
+          <span id="togglePersonText">折叠人员</span>
+        </button>
+        <div id="updateTime" style="font-size:13px;color:#999;">TV 模式 - 只读视图</div>
+      </div>
     </div>
 
     <div class="gantt-wrapper" id="ganttWrapper">
@@ -144,6 +156,52 @@
       business_trip_color: '#00b8d9'
     };
     let projectTitle = 'Claw 项目排期看板';
+    let personsCollapsed = false; // 人员折叠状态
+
+    // ========== 导航栏自动隐藏功能 ==========
+    let navbarTimeout = null;
+    const navbar = document.querySelector('.navbar');
+
+    function showNavbar() {
+      navbar.classList.remove('hidden');
+      clearTimeout(navbarTimeout);
+      navbarTimeout = setTimeout(() => {
+        navbar.classList.add('hidden');
+      }, 3000); // 3秒后自动隐藏
+    }
+
+    function setupNavbarAutoHide() {
+      // 鼠标移动时显示导航栏
+      document.addEventListener('mousemove', showNavbar);
+      document.addEventListener('click', showNavbar);
+      document.addEventListener('touchstart', showNavbar);
+      // 初始隐藏
+      showNavbar();
+    }
+
+    // ========== 人员折叠功能 ==========
+    function togglePersons() {
+      personsCollapsed = !personsCollapsed;
+      const icon = document.getElementById('togglePersonIcon');
+      const text = document.getElementById('togglePersonText');
+      const btn = document.getElementById('togglePersonBtn');
+
+      if (personsCollapsed) {
+        // 折叠人员 - 隐藏带有 data-is-person-row 属性的行
+        icon.textContent = '▶';
+        text.textContent = '展开人员';
+        btn.classList.add('active');
+        document.querySelectorAll('.gantt-left .gantt-row-label.person').forEach(el => el.style.display = 'none');
+        document.querySelectorAll('.gantt-right .gantt-body .gantt-row[data-is-person-row]').forEach(el => el.style.display = 'none');
+      } else {
+        // 展开人员
+        icon.textContent = '▼';
+        text.textContent = '折叠人员';
+        btn.classList.remove('active');
+        document.querySelectorAll('.gantt-left .gantt-row-label.person').forEach(el => el.style.display = '');
+        document.querySelectorAll('.gantt-right .gantt-body .gantt-row[data-is-person-row]').forEach(el => el.style.display = '');
+      }
+    }
 
     // TV模式：支持实时更新
     async function loadData() {
@@ -323,13 +381,8 @@
     function render() {
       const dates = getDates();
       const wrapper = document.getElementById('ganttWrapper');
-      const leftWidth = 220;
-      colWidth = Math.max(36, Math.floor((window.innerWidth - leftWidth - 48) / displayDays));
-      const ganttWidth = leftWidth + displayDays * colWidth;
+      colWidth = Math.max(36, Math.floor((wrapper.clientWidth - 220) / displayDays));
       const baseDate = new Date(today.getTime() + viewOffset * 86400000);
-
-      const gantt = document.getElementById('gantt');
-      gantt.style.width = ganttWidth + 'px';
 
       document.getElementById('todayTag').textContent = '今日：' + dateStr(today);
       window.currentBaseDate = baseDate;
@@ -513,7 +566,7 @@
             return aStart.getTime() - bStart.getTime();
           });
 
-          rightHtml += `<div class="gantt-row">`;
+          rightHtml += `<div class="gantt-row" data-is-person-row="true" data-project-id="${p.id}">`;
 
           personAssignments.forEach(a => {
             const aStart = parseDate(a.start_date);
@@ -621,6 +674,11 @@
     window.onload = () => {
       loadData();
       connectSSE();
+      setupNavbarAutoHide();
+      // 窗口大小变化时重新渲染
+      window.addEventListener('resize', () => {
+        if (projects.length > 0) render();
+      });
     };
   </script>
 </body>
