@@ -180,7 +180,7 @@
   <nav class="navbar">
     <h1>
       <span class="logo">C</span>
-      Claw 项目排期看板
+      <span id="navTitle">Claw 项目排期看板</span>
     </h1>
     <ul class="nav-menu">
       <li class="nav-item active">前台看板</li>
@@ -285,11 +285,8 @@
 
         // 更新页面标题
         document.title = projectTitle;
-        const titleElements = document.querySelectorAll('.navbar h1');
-        titleElements.forEach(el => {
-          const textSpan = el.querySelector('.title-text');
-          if (textSpan) textSpan.textContent = projectTitle;
-        });
+        const navTitleEl = document.getElementById('navTitle');
+        if (navTitleEl) navTitleEl.textContent = projectTitle;
 
         render();
       } catch (e) {

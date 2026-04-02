@@ -139,7 +139,7 @@
   <nav class="navbar">
     <h1>
       <span class="icon">C</span>
-      Claw Dashboard 管理后台
+      <span id="navTitle">Claw Dashboard 管理后台</span>
     </h1>
     <ul class="nav-menu">
       <li class="nav-item" onclick="location.href='/dashboard.html'">前台看板</li>
@@ -1639,7 +1639,12 @@
     }
 
     async function exportData() {
+      // 导出人员数据
       window.open('/api/export/csv', '_blank');
+      // 延迟导出项目分配数据
+      setTimeout(() => {
+        window.open('/api/export/assignments/csv', '_blank');
+      }, 500);
     }
 
     // ========== 同步状态和倒计时 ==========
@@ -1834,8 +1839,8 @@
         .then(config => {
           const title = (config.project_title || 'Claw 项目排期看板') + ' - 管理后台';
           document.title = title;
-          const navbarTitle = document.getElementById('navbarTitle');
-          if (navbarTitle) navbarTitle.textContent = title;
+          const navTitleEl = document.getElementById('navTitle');
+          if (navTitleEl) navTitleEl.textContent = title;
         })
         .catch(() => {});
     };

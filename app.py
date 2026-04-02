@@ -800,10 +800,12 @@ def export_data():
 
 @app.route('/api/export/csv', methods=['GET'])
 def export_persons_csv():
-    """导出人员数据为CSV"""
+    """导出人员数据为CSV（含项目分配、出差等信息）"""
     try:
         conn = get_db()
         persons = conn.execute('SELECT * FROM persons ORDER BY group_type, name').fetchall()
+        assignments = conn.execute('SELECT * FROM assignments').fetchall()
+        projects = conn.execute('SELECT * FROM projects').fetchall()
         conn.close()
 
         import csv
@@ -814,22 +816,37 @@ def export_persons_csv():
         output.write('\ufeff')
         writer = csv.writer(output)
 
-        # 写入表头
-        writer.writerow(['ID', '姓名', '部门', '钉钉ID', '分组', '头像', '请假状态', '请假开始', '请假结束', '请假类型'])
+        # 分组名称映射
+        group_names = {'pre': '前期美术', 'post': '后期制作', 'vj': 'VJ组'}
+
+        # 写入表头 - 包含人员信息、项目分配、出差信息
+        writer.writerow([
+            '工号', '姓名', '部门', '分组', '钉钉ID',
+            '请假状态', '请假开始', '请假结束', '请假类型',
+            '参与项目数', '项目列表'
+        ])
+
+        # 按分组整理项目
+        project_map = {p['id']: p['name'] for p in projects}
 
         # 写入数据
         for p in persons:
+            # 查找该人员的所有项目分配
+            person_assigns = [a for a in assignments if a['person_id'] == p['id']]
+            project_names = [project_map.get(a['project_id'], '未知') for a in person_assigns]
+
             writer.writerow([
                 p['id'],
                 p['name'],
-                p['department'],
-                p['ding_id'],
-                p['group_type'],
-                p['avatar'],
-                p['leave_status'],
-                p['leave_start'],
-                p['leave_end'],
-                p['leave_type']
+                p['department'] or '',
+                group_names.get(p['group_type'], p['group_type'] or ''),
+                p['ding_id'] or '',
+                p['leave_status'] or '',
+                p['leave_start'] or '',
+                p['leave_end'] or '',
+                p['leave_type'] or '',
+                len(person_assigns),
+                '; '.join(project_names) if project_names else ''
             ])
 
         output.seek(0)
@@ -840,6 +857,91 @@ def export_persons_csv():
         )
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
+
+
+@app.route('/api/export/assignments/csv', methods=['GET'])
+def export_assignments_csv():
+    """导出项目分配数据为CSV"""
+    try:
+        conn = get_db()
+        assignments = conn.execute('''
+            SELECT a.*, p.name as project_name, p.start_date as project_start,
+                   p.end_date as project_end, p.color as project_color,
+                   p.business_trip, p.business_trip_start, p.business_trip_end,
+                   p.business_trip_persons,
+                   pr.name as person_name, pr.department, pr.group_type
+            FROM assignments a
+            LEFT JOIN projects p ON a.project_id = p.id
+            LEFT JOIN persons pr ON a.person_id = pr.id
+            ORDER BY p.name, pr.name, a.start_date
+        ''').fetchall()
+        conn.close()
+
+        import csv
+        import io
+        import json
+
+        output = io.StringIO()
+        output.write('\ufeff')
+        writer = csv.writer(output)
+
+        group_names = {'pre': '前期美术', 'post': '后期制作', 'vj': 'VJ组'}
+
+        # 写入表头
+        writer.writerow([
+            '项目名称', '项目开始', '项目结束',
+            '人员姓名', '部门', '分组',
+            '分配开始', '分配结束', '分配天数',
+            '出差', '出差出发', '出差返程'
+        ])
+
+        for a in assignments:
+            # 判断该人员是否在出差人员中
+            is_bt_person = False
+            bt_persons = []
+            if a['business_trip_persons']:
+                try:
+                    bt_persons = json.loads(a['business_trip_persons'])
+                except:
+                    pass
+            if a['person_id'] in bt_persons:
+                is_bt_person = True
+
+            writer.writerow([
+                a['project_name'] or '',
+                a['project_start'] or '',
+                a['project_end'] or '',
+                a['person_name'] or '',
+                a['department'] or '',
+                group_names.get(a['group_type'], a['group_type'] or ''),
+                a['start_date'] or '',
+                a['end_date'] or '',
+                # 计算分配天数
+                calc_days(a['start_date'], a['end_date']) if a['start_date'] and a['end_date'] else '',
+                '是' if is_bt_person else '否',
+                a['business_trip_start'] if a['business_trip'] == 1 else '',
+                a['business_trip_end'] if a['business_trip'] == 1 else ''
+            ])
+
+        output.seek(0)
+        return Response(
+            output.getvalue(),
+            mimetype='text/csv; charset=utf-8',
+            headers={'Content-Disposition': 'attachment; filename=assignments.csv'}
+        )
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
+
+
+def calc_days(start, end):
+    """计算两个日期之间的天数"""
+    from datetime import datetime
+    try:
+        s = datetime.strptime(start, '%Y-%m-%d')
+        e = datetime.strptime(end, '%Y-%m-%d')
+        return (e - s).days + 1
+    except:
+        return ''
 
 
 @app.route('/api/leave/schedule', methods=['POST'])

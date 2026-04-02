@@ -88,7 +88,7 @@
   <nav class="navbar">
     <h1>
       <span class="logo">C</span>
-      <span class="title-text">Claw 项目排期看板</span>
+      <span id="navTitle">Claw 项目排期看板</span>
     </h1>
     <ul class="nav-menu">
       <li class="nav-item" onclick="location.href='/dashboard.html'">前台看板</li>
@@ -143,8 +143,9 @@
       leave_color: '#333333',
       business_trip_color: '#00b8d9'
     };
+    let projectTitle = 'Claw 项目排期看板';
 
-    // TV模式：只加载一次数据
+    // TV模式：支持实时更新
     async function loadData() {
       try {
         const [pj, ps, as_, cfg] = await Promise.all([
@@ -156,6 +157,7 @@
         projects = pj;
         persons = ps;
         assignments = as_;
+        projectTitle = cfg.project_title || 'Claw 项目排期看板';
 
         colorConfig = {
           pre_person_color: cfg.pre_person_color || '#1890ff',
@@ -166,12 +168,33 @@
           business_trip_color: cfg.business_trip_color || '#00b8d9'
         };
 
+        // 更新页面标题
+        document.title = projectTitle;
+        const navTitleEl = document.getElementById('navTitle');
+        if (navTitleEl) navTitleEl.textContent = projectTitle;
+
         render();
         document.getElementById('updateTime').textContent = 'TV 模式 - 最后更新: ' + new Date().toLocaleTimeString('zh-CN');
       } catch (e) {
         console.warn('[TV] 加载失败:', e.message);
         setTimeout(loadData, 10000);
       }
+    }
+
+    // SSE 实时更新
+    function connectSSE() {
+      const eventSource = new EventSource('/api/events');
+
+      eventSource.addEventListener('projects_changed', () => { console.log('[TV] 项目变更，重新加载'); loadData(); });
+      eventSource.addEventListener('persons_changed', () => { console.log('[TV] 人员变更，重新加载'); loadData(); });
+      eventSource.addEventListener('assignments_changed', () => { console.log('[TV] 分配变更，重新加载'); loadData(); });
+      eventSource.addEventListener('config_changed', () => { console.log('[TV] 配置变更，重新加载'); loadData(); });
+
+      eventSource.onerror = () => {
+        console.warn('[TV] SSE连接断开，5秒后重连');
+        eventSource.close();
+        setTimeout(connectSSE, 5000);
+      };
     }
 
     function hexToRgba(hex, alpha) {
@@ -597,6 +620,7 @@
 
     window.onload = () => {
       loadData();
+      connectSSE();
     };
   </script>
 </body>
