@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Claw 项目排期看板</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; }
+
+    /* 导航栏 */
+    .navbar { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); padding: 0 24px; display: flex; justify-content: space-between; align-items: center; height: 64px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); position: sticky; top: 0; z-index: 100; }
+    .navbar h1 { color: #333; font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+    .navbar h1 .logo { width: 36px; height: 36px; background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-size: 18px; font-weight: bold; }
+    .nav-menu { display: flex; list-style: none; gap: 8px; }
+    .nav-item { cursor: pointer; color: #666; padding: 10px 20px; border-radius: 20px; transition: all 0.3s; font-weight: 500; }
+    .nav-item:hover, .nav-item.active { color: white; background: linear-gradient(135deg, #667eea, #764ba2); }
+
+    /* 主容器 */
+    .main-container { padding: 24px; max-width: 1800px; margin: 0 auto; }
+
+    /* 工具栏 */
+    .toolbar { background: white; padding: 16px 20px; border-radius: 14px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+    .toolbar h2 { font-size: 18px; color: #333; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+
+    /* 标签 */
+    .tag { display: inline-flex; padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+    .tag-gradient { background: linear-gradient(135deg, #667eea, #764ba2); color: white; }
+    .tag-leave { background: linear-gradient(135deg, #333, #555); color: white; }
+
+    /* 甘特图容器 */
+    .gantt-wrapper { background: white; border-radius: 14px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); overflow: hidden; }
+    .gantt { display: flex; position: relative; }
+
+    /* 左侧区域 */
+    .gantt-left { width: 220px; min-width: 220px; border-right: 2px solid #e8e8e8; background: linear-gradient(180deg, #fafafa, #f5f5f5); position: sticky; left: 0; z-index: 10; }
+    .gantt-left-header { height: 60px; display: flex; align-items: center; padding: 0 16px; font-weight: 600; background: linear-gradient(180deg, #f8f9ff, #f0f5ff); border-bottom: 2px solid #e8e8e8; color: #555; font-size: 14px; }
+    .gantt-row-label { height: 42px; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid #f0f0f0; font-size: 13px; transition: background 0.2s; background: inherit; }
+    .gantt-row-label:hover { background: rgba(102,126,234,0.05); }
+    .gantt-row-label.project { background: linear-gradient(90deg, rgba(102,126,234,0.08), transparent); font-weight: 600; color: #333; }
+    .gantt-row-label.person { background: #fff; padding-left: 32px; color: #555; }
+    .row-dot { width: 10px; height: 10px; border-radius: 3px; margin-right: 10px; flex-shrink: 0; }
+
+    /* 右侧区域 */
+    .gantt-right { flex: 1; position: relative; }
+
+    /* 日期头部 */
+    .gantt-dates { display: flex; height: 60px; background: linear-gradient(180deg, #f8f9ff, #f0f5ff); border-bottom: 2px solid #e8e8e8; position: sticky; top: 0; z-index: 5; }
+    .date-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; border-right: 1px solid #f0f0f0; font-size: 13px; cursor: grab; user-select: none; transition: all 0.2s; position: relative; flex-shrink: 0; }
+    .date-cell:hover { background: rgba(102,126,234,0.08); }
+    .date-cell.today { background: linear-gradient(135deg, #e6f4ff, #bae0ff) !important; border-right: 2px solid #667eea; }
+    .date-cell.month-start { border-left: 2px solid #667eea; }
+    .date-num { font-weight: 700; font-size: 14px; }
+    .date-week { font-size: 11px; color: #999; margin-top: 2px; }
+    .month-label { position: absolute; top: 2px; left: 4px; font-size: 10px; color: #667eea; font-weight: 700; background: rgba(248,249,255,0.95); padding: 1px 4px; border-radius: 3px; white-space: nowrap; z-index: 1; }
+
+    /* 甘特图主体 */
+    .gantt-body { position: relative; }
+    .gantt-bg { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; pointer-events: none; }
+    .bg-col { border-right: 1px solid #f5f5f5; flex-shrink: 0; }
+    .bg-col.weekend { background: rgba(255, 77, 79, 0.04); }
+    .bg-col.today { background: rgba(102, 126, 234, 0.06); }
+    .gantt-row { height: 42px; border-bottom: 1px solid #f0f0f0; position: relative; }
+
+    /* 条形 - TV模式只读 */
+    .bar { position: absolute; height: 30px; top: 6px; border-radius: 6px; display: flex; align-items: center; padding: 0 14px 0 10px; color: white; font-size: 12px; font-weight: 500; user-select: none; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+
+    /* 空状态 */
+    .empty { text-align: center; padding: 80px 20px; color: #999; }
+    .empty .icon { font-size: 64px; margin-bottom: 16px; opacity: 0.5; }
+    .empty p { font-size: 16px; }
+    .empty a { color: #667eea; text-decoration: none; font-weight: 500; }
+    .empty a:hover { text-decoration: underline; }
+
+    /* 响应式 */
+    @media (max-width: 768px) {
+      .main-container { padding: 16px; }
+      .toolbar { padding: 12px 16px; }
+      .gantt-left { width: 160px; min-width: 160px; }
+      .gantt-row-label { padding: 0 10px; font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <h1>
+      <span class="logo">C</span>
+      Claw 项目排期看板
+    </h1>
+    <ul class="nav-menu">
+      <li class="nav-item" onclick="location.href='/dashboard.html'">前台看板</li>
+      <li class="nav-item" onclick="location.href='/admin.html'">后台管理</li>
+      <li class="nav-item active">电视看板</li>
+    </ul>
+  </nav>
+
+  <div class="main-container">
+    <div class="toolbar">
+      <h2>
+        <span>&#128197;</span> 项目排期
+        <span class="tag tag-gradient" id="todayTag"></span>
+      </h2>
+      <div id="updateTime" style="font-size:13px;color:#999;">TV 模式 - 只读视图</div>
+    </div>
+
+    <div class="gantt-wrapper" id="ganttWrapper">
+      <div class="gantt" id="gantt"></div>
+    </div>
+  </div>
+
+  <script>
+    // 部门配置 - 与后台保持一致
+    const deptConfig = [
+      { name: '总经办', color: '#722ed1' },
+      { name: '演艺制作部', color: '#eb2f96' },
+      { name: '项目管理组', color: '#fa8c16' },
+      { name: '前期美术', color: '#1890ff' },
+      { name: '后期制作', color: '#52c41a' },
+      { name: 'VJ组', color: '#13c2c2' },
+      { name: '视觉工程部', color: '#f5222d' },
+      { name: '综合管理部', color: '#faad14' },
+      { name: '市场部', color: '#722ed1' },
+      { name: '其他', color: '#999' }
+    ];
+
+    let projects = [];
+    let persons = [];
+    let assignments = [];
+    let displayDays = 30;
+    let colWidth = 42;
+    let today = new Date();
+    today.setHours(0,0,0,0);
+    let viewOffset = 0;
+
+    let colorConfig = {
+      pre_person_color: '#1890ff',
+      post_person_color: '#52c41a',
+      conflict_color: '#ff4d4f',
+      conflict_opacity: 0.3,
+      leave_color: '#333333',
+      business_trip_color: '#00b8d9'
+    };
+
+    // TV模式：只加载一次数据
+    async function loadData() {
+      try {
+        const [pj, ps, as_, cfg] = await Promise.all([
+          fetch('/api/projects').then(r => r.json()),
+          fetch('/api/persons').then(r => r.json()),
+          fetch('/api/assignments').then(r => r.json()),
+          fetch('/api/config').then(r => r.json()).catch(() => ({}))
+        ]);
+        projects = pj;
+        persons = ps;
+        assignments = as_;
+
+        colorConfig = {
+          pre_person_color: cfg.pre_person_color || '#1890ff',
+          post_person_color: cfg.post_person_color || '#52c41a',
+          conflict_color: cfg.conflict_color || '#ff4d4f',
+          conflict_opacity: (parseInt(cfg.conflict_opacity) || 30) / 100,
+          leave_color: cfg.leave_color || '#333333',
+          business_trip_color: cfg.business_trip_color || '#00b8d9'
+        };
+
+        render();
+        document.getElementById('updateTime').textContent = 'TV 模式 - 最后更新: ' + new Date().toLocaleTimeString('zh-CN');
+      } catch (e) {
+        console.warn('[TV] 加载失败:', e.message);
+        setTimeout(loadData, 10000);
+      }
+    }
+
+    function hexToRgba(hex, alpha) {
+      const r = parseInt(hex.slice(1, 3), 16);
+      const g = parseInt(hex.slice(3, 5), 16);
+      const b = parseInt(hex.slice(5, 7), 16);
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    function dateStr(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+
+    function parseDate(s, isEndDate = false) {
+      const [y, m, d] = s.split('-').map(Number);
+      if (isEndDate) return new Date(y, m - 1, d, 23, 59, 59, 999);
+      return new Date(y, m - 1, d, 0, 0, 0, 0);
+    }
+
+    function getLeaveRange(personId) {
+      const person = persons.find(p => p.id === personId);
+      if (!person || !person.leave_start || !person.leave_end) return null;
+      const start = parseDate(person.leave_start);
+      const end = parseDate(person.leave_end, true);
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      const isCurrentlyOnLeave = now >= start && now <= end;
+      const isFutureLeave = now < start;
+      return {
+        start: start,
+        end: end,
+        type: person.leave_type || person.leave_status || '请假',
+        isCurrentlyOnLeave: isCurrentlyOnLeave,
+        isFutureLeave: isFutureLeave
+      };
+    }
+
+    function getPersonColor(person) {
+      if (!person) return '#1890ff';
+      const dept = person.department || '';
+      const groupType = person.group_type || '';
+      for (const d of deptConfig) {
+        if (dept.includes(d.name) || groupType === d.name) {
+          return d.color;
+        }
+      }
+      return '#1890ff';
+    }
+
+    function getPersonDept(person) {
+      if (!person) return '其他';
+      const dept = person.department || '';
+      const groupType = person.group_type || '';
+      for (const d of deptConfig) {
+        if (dept.includes(d.name) || groupType === d.name) {
+          return d.name;
+        }
+      }
+      return '其他';
+    }
+
+    function getDates() {
+      const dates = [];
+      const baseDate = new Date(today.getTime() + viewOffset * 86400000);
+      for (let i = 0; i < displayDays; i++) {
+        const d = new Date(baseDate);
+        d.setDate(d.getDate() + i);
+        const dow = d.getDay();
+        dates.push({
+          str: dateStr(d),
+          day: d.getDate(),
+          week: ['日','一','二','三','四','五','六'][dow],
+          weekend: dow === 0 || dow === 6,
+          today: i === 0 && viewOffset === 0
+        });
+      }
+      return dates;
+    }
+
+    function getDatesBetween(startDate, endDate) {
+      const dates = [];
+      const current = new Date(startDate);
+      current.setHours(0, 0, 0, 0);
+      const end = new Date(endDate);
+      end.setHours(0, 0, 0, 0);
+      while (current <= end) {
+        dates.push(new Date(current));
+        current.setDate(current.getDate() + 1);
+      }
+      return dates;
+    }
+
+    function getConflictDays(personId, excludeAid) {
+      const currentAssign = assignments.find(a => a.id === excludeAid);
+      if (!currentAssign) return [];
+      const currentStart = parseDate(currentAssign.start_date);
+      const currentEnd = parseDate(currentAssign.end_date, true);
+      const currentDates = getDatesBetween(currentStart, currentEnd);
+      const dayCount = {};
+      for (const d of currentDates) dayCount[d.toISOString().split('T')[0]] = 1;
+      const personAssignments = assignments.filter(a => a.person_id === personId && a.id !== excludeAid);
+      for (const a of personAssignments) {
+        const aStart = parseDate(a.start_date);
+        const aEnd = parseDate(a.end_date, true);
+        const hasOverlap = currentStart <= aEnd && currentEnd >= aStart;
+        if (hasOverlap) {
+          const overlapDates = getDatesBetween(
+            currentStart > aStart ? currentStart : aStart,
+            currentEnd < aEnd ? currentEnd : aEnd
+          );
+          for (const d of overlapDates) {
+            const key = d.toISOString().split('T')[0];
+            if (dayCount[key] !== undefined) dayCount[key]++;
+          }
+        }
+      }
+      return currentDates.map(d => ({
+        date: d,
+        isConflict: dayCount[d.toISOString().split('T')[0]] > 1
+      }));
+    }
+
+    function render() {
+      const dates = getDates();
+      const wrapper = document.getElementById('ganttWrapper');
+      const leftWidth = 220;
+      colWidth = Math.max(36, Math.floor((window.innerWidth - leftWidth - 48) / displayDays));
+      const ganttWidth = leftWidth + displayDays * colWidth;
+      const baseDate = new Date(today.getTime() + viewOffset * 86400000);
+
+      const gantt = document.getElementById('gantt');
+      gantt.style.width = ganttWidth + 'px';
+
+      document.getElementById('todayTag').textContent = '今日：' + dateStr(today);
+      window.currentBaseDate = baseDate;
+
+      if (projects.length === 0) {
+        document.getElementById('gantt').innerHTML = `
+          <div class="empty">
+            <div class="icon">&#128203;</div>
+            <p>暂无项目，请先在<a href="/admin.html">后台管理</a>中添加项目和人员</p>
+          </div>`;
+        return;
+      }
+
+      // 日期头部
+      let headerHtml = '<div class="gantt-dates" id="dateHeader">';
+      let currentMonth = null;
+      dates.forEach((d, index) => {
+        const date = new Date(baseDate);
+        date.setDate(date.getDate() + index);
+        const month = date.getMonth() + 1;
+        const isMonthStart = currentMonth !== month;
+        currentMonth = month;
+        const monthLabel = isMonthStart ? `<div class="month-label">${month}月</div>` : '';
+        headerHtml += `<div class="date-cell ${d.weekend?'weekend':''} ${d.today?'today':''} ${isMonthStart?'month-start':''}" style="width:${colWidth}px">${monthLabel}<div class="date-num">${d.day}</div><div class="date-week">${d.week}</div></div>`;
+      });
+      headerHtml += '</div>';
+
+      // 左侧标签
+      let leftHtml = '<div class="gantt-left"><div class="gantt-left-header">&#128196; 项目 / 人员</div>';
+
+      const sortedPersons = [...persons].sort((a, b) => {
+        const deptA = getPersonDept(a);
+        const deptB = getPersonDept(b);
+        const idxA = deptConfig.findIndex(d => d.name === deptA);
+        const idxB = deptConfig.findIndex(d => d.name === deptB);
+        if (idxA !== idxB) return idxA - idxB;
+        return (a.name || '').localeCompare(b.name || '', 'zh-CN');
+      });
+      const personIndex = {};
+      sortedPersons.forEach((p, i) => personIndex[p.id] = i);
+
+      projects.forEach(p => {
+        const pStart = parseDate(p.start_date);
+        const pEnd = parseDate(p.end_date, true);
+        const pStartOff = Math.floor((pStart - baseDate) / 86400000);
+        const pEndOff = Math.floor((pEnd - baseDate) / 86400000);
+
+        if (pEndOff < 0 || pStartOff >= displayDays) {
+          return;
+        }
+
+        leftHtml += `<div class="gantt-row-label project"><div class="row-dot" style="background:${p.color||'#667eea'}"></div>${p.name}</div>`;
+        const pAssigns = assignments.filter(a => a.project_id === p.id);
+        const personGroups = {};
+        pAssigns.forEach(a => {
+          if (!personGroups[a.person_id]) personGroups[a.person_id] = [];
+          personGroups[a.person_id].push(a);
+        });
+
+        const sortedPersonIds = Object.keys(personGroups).sort((aId, bId) => {
+          const idxA = personIndex[aId] ?? 999;
+          const idxB = personIndex[bId] ?? 999;
+          return idxA - idxB;
+        });
+
+        sortedPersonIds.forEach(personId => {
+          const person = persons.find(x => x.id === personId);
+          if (person) {
+            const leaveRange = getLeaveRange(personId);
+            let leaveBadge = '';
+            if (leaveRange) {
+              if (leaveRange.isCurrentlyOnLeave) {
+                leaveBadge = `<span class="tag tag-leave" style="margin-left:6px;padding:2px 6px;font-size:10px;background:#9ca3af">${person.leave_type || '请假'}</span>`;
+              } else if (leaveRange.isFutureLeave) {
+                leaveBadge = `<span style="width:8px;height:8px;background:#ef4444;border-radius:50%;display:inline-block;margin-left:6px" title="即将请假: ${person.leave_start}~${person.leave_end}"></span>`;
+              }
+            }
+            leftHtml += `<div class="gantt-row-label person" data-person-row="${personId}" data-project-row="${p.id}">${person.name}${leaveBadge}</div>`;
+          }
+        });
+      });
+      leftHtml += '</div>';
+
+      // 右侧甘特条
+      let rightHtml = '<div class="gantt-right">' + headerHtml + '<div class="gantt-body">';
+      rightHtml += '<div class="gantt-bg">';
+      dates.forEach(d => {
+        rightHtml += `<div class="bg-col ${d.weekend?'weekend':''} ${d.today?'today':''}" style="width:${colWidth}px"></div>`;
+      });
+      rightHtml += '</div>';
+
+      projects.forEach(p => {
+        const pAssigns = assignments.filter(a => a.project_id === p.id);
+        const pStart = parseDate(p.start_date);
+        const pEnd = parseDate(p.end_date, true);
+
+        const pStartOff = Math.floor((pStart - baseDate) / 86400000);
+        const pEndOff = Math.floor((pEnd - baseDate) / 86400000);
+
+        if (pEndOff < 0 || pStartOff >= displayDays) {
+          return;
+        }
+
+        rightHtml += `<div class="gantt-row" data-project-id="${p.id}">`;
+        const viewStartOff = Math.max(0, pStartOff);
+        const viewEndOff = Math.min(displayDays - 1, pEndOff);
+        if (viewEndOff >= viewStartOff) {
+          const left = viewStartOff * colWidth;
+          const days = viewEndOff - viewStartOff + 1;
+          const width = days * colWidth - 4;
+
+          let projectBarStyle = `left:${left}px;width:${width}px;background:${p.color||'#667eea'}`;
+          let projectIcons = '';
+
+          // 出差颜色处理
+          if (p.business_trip == 1 && p.business_trip_start && p.business_trip_end) {
+            const btStart = parseDate(p.business_trip_start);
+            const btEnd = parseDate(p.business_trip_end, true);
+            const businessTripRgba = hexToRgba(colorConfig.business_trip_color, 0.5);
+
+            if (btStart <= pEnd && btEnd >= pStart) {
+              let gradientParts = [];
+              for (let i = 0; i < days; i++) {
+                const currentDate = new Date(baseDate);
+                currentDate.setDate(currentDate.getDate() + viewStartOff + i);
+                const startPercent = (i / days) * 100;
+                const endPercent = ((i + 1) / days) * 100;
+                const isOnBusinessTrip = currentDate >= btStart && currentDate <= btEnd;
+                if (isOnBusinessTrip) {
+                  gradientParts.push(`${businessTripRgba} ${startPercent}% ${endPercent}%`);
+                } else {
+                  gradientParts.push(`transparent ${startPercent}% ${endPercent}%`);
+                }
+              }
+              projectBarStyle = `left:${left}px;width:${width}px;background: linear-gradient(to right, ${gradientParts.join(', ')}), ${p.color||'#667eea'};`;
+
+              // 飞机图标
+              const showStartIcon = btStart <= pEnd && btStart >= pStart;
+              const showEndIcon = btEnd <= pEnd && btEnd >= pStart;
+              if (showStartIcon) {
+                const btStartOff = Math.floor((btStart - baseDate) / 86400000);
+                const btDayFromViewStart = btStartOff - pStartOff;
+                const iconLeft = Math.max(0, Math.min(width - 12, btDayFromViewStart * colWidth + colWidth / 2 - 6));
+                projectIcons += `<span style="position:absolute;left:${iconLeft}px;top:50%;transform:translateY(-50%);font-size:12px;z-index:10">&#9992;</span>`;
+              }
+              if (showEndIcon && btEnd.getTime() !== btStart.getTime()) {
+                const btEndOff = Math.floor((btEnd - baseDate) / 86400000);
+                const btDayFromViewStart = btEndOff - pStartOff;
+                const iconLeft = Math.max(0, Math.min(width - 12, btDayFromViewStart * colWidth + colWidth / 2 - 6));
+                projectIcons += `<span style="position:absolute;left:${iconLeft}px;top:50%;transform:translateY(-50%);font-size:12px;z-index:10">&#9992;</span>`;
+              }
+            }
+          }
+
+          rightHtml += `<div class="bar" style="${projectBarStyle};position:relative">${p.name}${projectIcons}</div>`;
+        }
+        rightHtml += '</div>';
+
+        // 人员行
+        const personGroups = {};
+        pAssigns.forEach(a => {
+          if (!personGroups[a.person_id]) personGroups[a.person_id] = [];
+          personGroups[a.person_id].push(a);
+        });
+
+        const sortedPersonIds = Object.keys(personGroups).sort((aId, bId) => {
+          const idxA = personIndex[aId] ?? 999;
+          const idxB = personIndex[bId] ?? 999;
+          return idxA - idxB;
+        });
+
+        sortedPersonIds.forEach(personId => {
+          const personAssignments = personGroups[personId];
+          const person = persons.find(x => x.id === personId);
+          const personColor = getPersonColor(person);
+          const leaveRange = getLeaveRange(personId);
+
+          personAssignments.sort((a, b) => {
+            const aStart = parseDate(a.start_date);
+            const bStart = parseDate(b.start_date);
+            return aStart.getTime() - bStart.getTime();
+          });
+
+          rightHtml += `<div class="gantt-row">`;
+
+          personAssignments.forEach(a => {
+            const aStart = parseDate(a.start_date);
+            const aEnd = parseDate(a.end_date, true);
+            const aStartOff = Math.floor((aStart - baseDate) / 86400000);
+            const aEndOff = Math.floor((aEnd - baseDate) / 86400000);
+            const rowStartOff = Math.max(0, aStartOff);
+            const rowEndOff = Math.min(displayDays - 1, aEndOff);
+
+            const isWithinProject = aStart <= pEnd && aEnd >= pStart;
+
+            if (isWithinProject && rowEndOff >= rowStartOff && rowStartOff < displayDays && rowEndOff >= 0) {
+              const left = rowStartOff * colWidth;
+              const days = rowEndOff - rowStartOff + 1;
+              const width = days * colWidth - 4;
+
+              const conflictDays = getConflictDays(a.person_id, a.id);
+              const isInLeave = leaveRange && aStart <= leaveRange.end && aEnd >= leaveRange.start;
+
+              // 构建渐变 - 每一天都要指定颜色
+              const conflictRgba = hexToRgba(colorConfig.conflict_color, colorConfig.conflict_opacity);
+              const leaveRgba = hexToRgba(colorConfig.leave_color, 0.85);
+              const btRgba = hexToRgba(colorConfig.business_trip_color, 0.5);
+
+              // 检查是否为出差人员
+              let isBusinessTripPerson = false;
+              let btStart = null, btEnd = null;
+              if (p.business_trip == 1 && p.business_trip_start && p.business_trip_end) {
+                try {
+                  const btPersons = p.business_trip_persons ? JSON.parse(p.business_trip_persons) : [];
+                  if (btPersons.includes(personId)) {
+                    isBusinessTripPerson = true;
+                    btStart = parseDate(p.business_trip_start);
+                    btEnd = parseDate(p.business_trip_end, true);
+                  }
+                } catch(e) {}
+              }
+
+              // 构建每一天的颜色段
+              let gradientParts = [];
+              for (let i = 0; i < days; i++) {
+                const currentDate = new Date(baseDate);
+                currentDate.setDate(currentDate.getDate() + rowStartOff + i);
+                const startPercent = (i / days) * 100;
+                const endPercent = ((i + 1) / days) * 100;
+
+                const onLeave = leaveRange && currentDate >= leaveRange.start && currentDate <= leaveRange.end;
+                const onBusinessTrip = isBusinessTripPerson && btStart && btEnd && currentDate >= btStart && currentDate <= btEnd;
+                const dayIdx = i;
+                const isConflict = dayIdx < conflictDays.length ? conflictDays[dayIdx].isConflict : false;
+
+                if (onLeave) {
+                  gradientParts.push(`${leaveRgba} ${startPercent}% ${endPercent}%`);
+                } else if (isConflict) {
+                  gradientParts.push(`${conflictRgba} ${startPercent}% ${endPercent}%`);
+                } else if (onBusinessTrip) {
+                  gradientParts.push(`${btRgba} ${startPercent}% ${endPercent}%`);
+                } else {
+                  gradientParts.push(`transparent ${startPercent}% ${endPercent}%`);
+                }
+              }
+
+              let extraStyle = '';
+              if (gradientParts.length > 0) {
+                extraStyle = `background: linear-gradient(to right, ${gradientParts.join(', ')}), ${personColor};`;
+              } else {
+                extraStyle = `background: ${personColor};`;
+              }
+
+              const leaveTip = isInLeave ? ` title="请假中: ${leaveRange.type}"` : '';
+
+              // 飞机图标
+              let personBtIcons = '';
+              if (isBusinessTripPerson && btStart && btEnd) {
+                const btInAssign = btStart <= aEnd && btEnd >= aStart;
+                if (btInAssign) {
+                  const showStartIcon = btStart <= aEnd && btStart >= aStart;
+                  const showEndIcon = btEnd <= aEnd && btEnd >= aStart;
+
+                  if (showStartIcon) {
+                    const btStartOff = Math.floor((btStart - baseDate) / 86400000);
+                    const iconLeft = (btStartOff - rowStartOff) * colWidth + colWidth / 2 - 6;
+                    personBtIcons += `<span style="position:absolute;left:${iconLeft}px;top:50%;transform:translateY(-50%);font-size:10px">&#9992;</span>`;
+                  }
+                  if (showEndIcon && btEnd.getTime() !== btStart.getTime()) {
+                    const btEndOff = Math.floor((btEnd - baseDate) / 86400000);
+                    const iconLeft = (btEndOff - rowStartOff) * colWidth + colWidth / 2 - 6;
+                    personBtIcons += `<span style="position:absolute;left:${iconLeft}px;top:50%;transform:translateY(-50%);font-size:10px">&#9992;</span>`;
+                  }
+                }
+              }
+
+              rightHtml += `<div class="bar"${leaveTip} style="left:${left}px;width:${width}px;${extraStyle}">${personBtIcons || ''}<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div></div>`;
+            }
+          });
+
+          rightHtml += '</div>';
+        });
+      });
+
+      rightHtml += '</div></div>';
+      document.getElementById('gantt').innerHTML = leftHtml + rightHtml;
+    }
+
+    window.onload = () => {
+      loadData();
+    };
+  </script>
+</body>
+</html>

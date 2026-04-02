@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.db
+*.sqlite3
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+.python/
+
+# Environment variables
+.env
+.env.local
+
+# Node
+node_modules/
+dist/
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+test_*.html
+DEBUG_GUIDE.md
+PAGES_GUIDE.md
+SETUP_GUIDE.md
+FUNCTIONS_TEST.md
+STARTUP_COMPLETE.md
+
+# Build outputs
+*.egg-info/
+
+# Logs
+*.log

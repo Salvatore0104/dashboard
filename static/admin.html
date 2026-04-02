@@ -1,0 +1,1834 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>后台管理 - Claw Dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📋</text></svg>">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; }
+    
+    /* 导航栏 */
+    .navbar { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); padding: 0 24px; display: flex; justify-content: space-between; align-items: center; height: 64px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); position: sticky; top: 0; z-index: 100; }
+    .navbar h1 { color: #333; font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .navbar h1 .icon { width: 32px; height: 32px; background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-size: 16px; }
+    .nav-menu { display: flex; list-style: none; gap: 8px; }
+    .nav-item { cursor: pointer; color: #666; padding: 8px 20px; border-radius: 20px; transition: all 0.3s; font-weight: 500; }
+    .nav-item:hover, .nav-item.active { color: white; background: linear-gradient(135deg, #667eea, #764ba2); }
+    
+    /* 主容器 */
+    .main-container { padding: 24px; max-width: 1600px; margin: 0 auto; }
+    
+    /* 卡片 */
+    .card { background: white; border-radius: 16px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); transition: all 0.3s; }
+    .card:hover { box-shadow: 0 6px 30px rgba(0,0,0,0.12); }
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #f0f0f0; }
+    .card-title { font-size: 16px; font-weight: 600; color: #333; display: flex; align-items: center; gap: 8px; }
+    .card-title .icon { width: 28px; height: 28px; background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 6px; display: flex; align-items: center; justify-content: center; color: white; font-size: 14px; }
+    .card-count { background: #f0f5ff; color: #667eea; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+    
+    /* 按钮 */
+    .btn-group { display: flex; flex-wrap: wrap; gap: 10px; }
+    .btn { padding: 10px 18px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; transition: all 0.3s; display: inline-flex; align-items: center; gap: 6px; }
+    .btn i { font-size: 16px; }
+    .btn-primary { background: linear-gradient(135deg, #667eea, #764ba2); color: white; box-shadow: 0 2px 10px rgba(102,126,234,0.3); }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(102,126,234,0.4); }
+    .btn-success { background: linear-gradient(135deg, #11998e, #38ef7d); color: white; box-shadow: 0 2px 10px rgba(17,153,142,0.3); }
+    .btn-success:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(17,153,142,0.4); }
+    .btn-warning { background: linear-gradient(135deg, #f093fb, #f5576c); color: white; box-shadow: 0 2px 10px rgba(245,87,108,0.3); }
+    .btn-warning:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(245,87,108,0.4); }
+    .btn-danger { background: linear-gradient(135deg, #ff416c, #ff4b2b); color: white; box-shadow: 0 2px 10px rgba(255,65,108,0.3); }
+    .btn-danger:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(255,65,108,0.4); }
+    .btn-default { background: #f5f5f5; color: #666; border: 1px solid #e8e8e8; }
+    .btn-default:hover { background: #f0f0f0; border-color: #667eea; color: #667eea; }
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+    
+    /* 表格 */
+    .table-container { overflow-x: auto; border-radius: 8px; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; }
+    th { background: linear-gradient(135deg, #f8f9ff, #f0f5ff); padding: 14px 16px; text-align: left; font-weight: 600; border-bottom: 2px solid #e8e8e8; font-size: 13px; color: #555; }
+    td { padding: 14px 16px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+    tr:hover td { background: #f8f9ff; }
+    tr:last-child td { border-bottom: none; }
+    
+    /* 标签 */
+    .tag { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 500; margin-right: 6px; gap: 4px; }
+    .tag-blue { background: linear-gradient(135deg, #e6f4ff, #bae0ff); color: #1677ff; }
+    .tag-green { background: linear-gradient(135deg, #f6ffed, #d9f7be); color: #52c41a; }
+    .tag-orange { background: linear-gradient(135deg, #fff7e6, #ffd591); color: #fa8c16; }
+    .tag-purple { background: linear-gradient(135deg, #f9f0ff, #efdbff); color: #722ed1; }
+    .tag-red { background: linear-gradient(135deg, #fff1f0, #ffccc7); color: #ff4d4f; }
+    .tag-leave { background: linear-gradient(135deg, #333, #666); color: white; }
+    
+    /* 弹窗 */
+    .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; z-index: 1000; }
+    .modal { background: white; border-radius: 16px; width: 90%; max-width: 600px; max-height: 85vh; overflow-y: auto; animation: modalIn 0.3s ease; }
+    @keyframes modalIn { from { opacity: 0; transform: scale(0.95) translateY(-20px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+    .modal-header { padding: 20px 24px; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; }
+    .modal-title { font-size: 18px; font-weight: 600; color: #333; }
+    .modal-close { cursor: pointer; font-size: 24px; color: #999; background: none; border: none; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+    .modal-close:hover { color: #fff; background: #f0f0f0; }
+    .modal-body { padding: 24px; }
+    .modal-footer { padding: 16px 24px; border-top: 1px solid #f0f0f0; display: flex; justify-content: flex-end; gap: 10px; }
+    
+    /* 表单 */
+    .form-group { margin-bottom: 18px; }
+    .form-label { display: block; margin-bottom: 8px; font-weight: 500; font-size: 14px; color: #333; }
+    .form-input { width: 100%; padding: 12px 14px; border: 2px solid #e8e8e8; border-radius: 8px; font-size: 14px; transition: all 0.3s; }
+    .form-input:focus { border-color: #667eea; outline: none; box-shadow: 0 0 0 3px rgba(102,126,234,0.1); }
+    .form-row { display: flex; gap: 16px; }
+    .form-row .form-group { flex: 1; }
+    .color-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+    .color-dot { width: 36px; height: 36px; border-radius: 50%; cursor: pointer; border: 3px solid transparent; transition: all 0.2s; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+    .color-dot:hover { transform: scale(1.15); }
+    .color-dot.active { border-color: #333; transform: scale(1.1); }
+    
+    /* 警告框 */
+    .alert { padding: 14px 18px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+    .alert i { font-size: 18px; }
+    .alert-success { background: linear-gradient(135deg, #f6ffed, #d9f7be); color: #389e0d; border: 1px solid #b7eb8f; }
+    .alert-error { background: linear-gradient(135deg, #fff1f0, #ffccc7); color: #cf1322; border: 1px solid #ffa39e; }
+    
+    /* 部门分组 */
+    .dept-section { margin-bottom: 24px; }
+    .dept-header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: linear-gradient(135deg, #f8f9ff, #f0f5ff); border-radius: 10px; margin-bottom: 12px; cursor: pointer; transition: all 0.2s; }
+    .dept-header:hover { background: linear-gradient(135deg, #eef1ff, #e6edff); }
+    .dept-icon { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-size: 16px; }
+    .dept-name { font-weight: 600; color: #333; flex: 1; }
+    .dept-count { background: rgba(255,255,255,0.8); color: #667eea; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+    .dept-toggle { font-size: 14px; color: #999; transition: transform 0.3s; }
+    .dept-toggle.collapsed { transform: rotate(-90deg); }
+    .dept-content { padding-left: 16px; }
+    .dept-content.collapsed { display: none; }
+    
+    /* 人员卡片网格 */
+    .person-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+    .person-card { background: #f8f9ff; border: 1px solid #e8e8e8; border-radius: 10px; padding: 14px; display: flex; align-items: center; gap: 12px; transition: all 0.2s; }
+    .person-card:hover { border-color: #667eea; box-shadow: 0 4px 12px rgba(102,126,234,0.15); transform: translateY(-2px); }
+    .person-avatar { width: 44px; height: 44px; border-radius: 50%; background: linear-gradient(135deg, #667eea, #764ba2); color: white; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 600; flex-shrink: 0; }
+    .person-info { flex: 1; min-width: 0; }
+    .person-name { font-weight: 600; color: #333; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .person-dept { font-size: 12px; color: #999; margin-top: 2px; }
+    .person-card .btn-sm { padding: 4px 8px; font-size: 11px; }
+    
+    /* 请假列表 */
+    .leave-list { display: flex; flex-direction: column; gap: 10px; }
+    .leave-item { display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: linear-gradient(135deg, #f8f9ff, #f0f5ff); border-radius: 10px; border: 1px solid #e8e8e8; transition: all 0.2s; }
+    .leave-item:hover { border-color: #667eea; box-shadow: 0 4px 12px rgba(102,126,234,0.1); }
+    .leave-type-badge { padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; background: linear-gradient(135deg, #333, #555); color: white; }
+    .leave-dates { flex: 1; display: flex; align-items: center; gap: 8px; font-size: 13px; color: #666; }
+    .leave-dates i { color: #999; }
+    .leave-actions { display: flex; gap: 6px; }
+    
+    /* 空状态 */
+    .empty-state { text-align: center; padding: 40px 20px; color: #999; }
+    .empty-state i { font-size: 48px; margin-bottom: 12px; opacity: 0.5; }
+    .empty-state p { font-size: 14px; }
+    
+    /* 响应式 */
+    @media (max-width: 768px) {
+      .main-container { padding: 16px; }
+      .btn { padding: 8px 14px; font-size: 13px; }
+      .form-row { flex-direction: column; gap: 0; }
+      .person-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <h1>
+      <span class="icon">C</span>
+      Claw Dashboard 管理后台
+    </h1>
+    <ul class="nav-menu">
+      <li class="nav-item" onclick="location.href='/dashboard.html'">前台看板</li>
+      <li class="nav-item active">后台管理</li>
+      <li class="nav-item" onclick="location.href='/tv.html'">电视看板</li>
+    </ul>
+  </nav>
+
+  <div class="main-container">
+    <!-- 同步状态栏 -->
+    <div id="syncStatusBar" class="card" style="display:none;padding:12px 20px;margin-bottom:16px;background:linear-gradient(135deg, #f0f5ff, #e6edff);border:1px solid #adc6ff">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:18px" id="syncIcon">🔄</span>
+          <div>
+            <div style="font-weight:600;color:#333;font-size:14px" id="syncTitle">请假自动同步</div>
+            <div style="font-size:12px;color:#666" id="syncSubtitle">每4小时自动同步一次</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px">
+          <div style="text-align:center">
+            <div style="font-size:20px;font-weight:700;color:#667eea" id="syncCountdown">--</div>
+            <div style="font-size:11px;color:#999">下次同步</div>
+          </div>
+          <button class="btn btn-success btn-sm" onclick="syncLeaveNow()" style="padding:8px 16px">
+            <i>🔄</i> 立即同步
+          </button>
+          <button class="btn btn-warning btn-sm" onclick="testSyncNow()" style="padding:8px 16px" title="将同步间隔临时设为10秒进行测试">
+            <i>⚡</i> 测试10秒
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 快捷操作栏 -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title"><span class="icon">⚡</span>快捷操作</div>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="showProjectModal()"><i>➕</i>添加项目</button>
+        <button class="btn btn-default" onclick="showSyncModal()"><i>👥</i>钉钉人员同步</button>
+        <button class="btn btn-success" onclick="syncLeaveNow()"><i>🔄</i>同步请假状态</button>
+        <button class="btn btn-warning" onclick="showLeaveTestModal()"><i>📋</i>测试请假</button>
+        <button class="btn btn-default" onclick="showConfigModal()"><i>⚙️</i>系统配置</button>
+        <button class="btn btn-default" onclick="exportData()"><i>📤</i>导出数据</button>
+        <button class="btn btn-danger" onclick="clearAllData()"><i>🗑️</i>清空数据</button>
+      </div>
+    </div>
+
+    <!-- 项目列表 -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title"><span class="icon">📁</span>项目列表</div>
+        <span class="card-count" id="projectCount">0 个</span>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead><tr><th>项目名称</th><th>开始日期</th><th>结束日期</th><th>出差</th><th>出发日</th><th>出差人员</th><th style="text-align:right">操作</th></tr></thead>
+          <tbody id="projectBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 人员列表 -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title"><span class="icon">👤</span>人员列表</div>
+        <span class="card-count" id="personCount">0 人</span>
+      </div>
+      <div id="personList">
+        <div class="empty-state">
+          <i>👥</i>
+          <p>暂无人员，请先从钉钉同步</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 测试请假记录 -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title"><span class="icon">📋</span>请假记录</div>
+        <span class="card-count" id="leaveRecordCount">0 条</span>
+      </div>
+      <div id="leaveRecordList">
+        <div class="empty-state">
+          <i>📋</i>
+          <p>暂无请假记录</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 项目弹窗 -->
+  <div class="modal-overlay" id="projectModal">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title" id="projectModalTitle">添加项目</div>
+        <button class="modal-close" onclick="hideModal('projectModal')">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">项目名称 *</label>
+          <input type="text" class="form-input" id="projectName" placeholder="请输入项目名称">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">开始日期 *</label>
+            <input type="date" class="form-input" id="projectStart">
+          </div>
+          <div class="form-group">
+            <label class="form-label">结束日期 *</label>
+            <input type="date" class="form-input" id="projectEnd">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">项目颜色</label>
+          <div class="color-grid" id="colorPicker"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-default" onclick="hideModal('projectModal')">取消</button>
+        <button class="btn btn-primary" onclick="saveProject()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 出差编辑弹窗 -->
+  <div class="modal-overlay" id="businessTripModal">
+    <div class="modal" style="max-width: 800px; width: 95vw;">
+      <div class="modal-header">
+        <div class="modal-title" id="businessTripModalTitle">✈️ 项目出差</div>
+        <button class="modal-close" onclick="hideModal('businessTripModal')">×</button>
+      </div>
+      <div class="modal-body" style="padding:20px">
+        <input type="hidden" id="btProjectId">
+        <div id="btProjectName" style="font-size:18px;font-weight:600;color:#333;margin-bottom:20px;text-align:center;padding:12px;background:#f8f9fa;border-radius:8px"></div>
+        
+        <div class="form-group" style="margin-bottom:20px">
+          <label class="form-label" style="display:flex;align-items:center;gap:10px;font-size:15px">
+            <input type="checkbox" id="projectBusinessTrip" onchange="toggleBusinessTripDates()" style="width:20px;height:20px;cursor:pointer">
+            <span style="font-weight:600">启用出差</span>
+          </label>
+        </div>
+        
+        <div id="businessTripDates" style="display:none;flex-direction:column;gap:16px">
+          <!-- 第一行：出差日期（整行） -->
+          <div style="padding:16px;background:#f8f9fa;border-radius:10px">
+            <div style="font-weight:600;color:#333;margin-bottom:12px;font-size:14px">📅 出差日期</div>
+            <div style="display:flex;gap:16px">
+              <div style="flex:1">
+                <div style="display:block;font-size:13px;color:#666;margin-bottom:6px;font-weight:500">出发日</div>
+                <input type="date" id="projectBusinessTripStart" style="width:100%;padding:12px;border:2px solid #e8e8e8;border-radius:8px;font-size:14px">
+              </div>
+              <div style="flex:1">
+                <div style="display:block;font-size:13px;color:#666;margin-bottom:6px;font-weight:500">回程日</div>
+                <input type="date" id="projectBusinessTripEnd" style="width:100%;padding:12px;border:2px solid #e8e8e8;border-radius:8px;font-size:14px">
+              </div>
+            </div>
+          </div>
+          
+          <!-- 第二行：出差人员（整行，两列并排：前期美术 | 后期制作） -->
+          <div id="businessTripPersons" style="padding:16px;background:#fff;border:2px solid #e8e8e8;border-radius:10px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+              <div style="font-weight:600;color:#333;font-size:14px">👥 出差人员</div>
+              <span id="btPersonCount" style="font-size:12px;color:#667eea;background:#f0f5ff;padding:4px 12px;border-radius:12px;font-weight:500"></span>
+            </div>
+            
+            <!-- 两列并排：前期美术 | 后期制作 -->
+            <div id="businessTripPersonList" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-default" onclick="hideModal('businessTripModal')">取消</button>
+        <button class="btn btn-primary" onclick="saveBusinessTrip()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 配置弹窗 -->
+  <div class="modal-overlay" id="configModal">
+    <div class="modal" style="max-width: 650px;">
+      <div class="modal-header">
+        <div class="modal-title">⚙️ 系统配置</div>
+        <button class="modal-close" onclick="hideModal('configModal')">×</button>
+      </div>
+      <div class="modal-body">
+        <!-- 钉钉配置 -->
+        <div style="margin-bottom:20px;padding-bottom:20px;border-bottom:1px solid #f0f0f0">
+          <div style="font-weight:600;margin-bottom:14px;color:#333;font-size:15px">钉钉配置</div>
+          <div class="form-group"><label class="form-label">钉钉 AppKey</label><input type="text" class="form-input" id="dingAppKey" placeholder="请输入钉钉AppKey"></div>
+          <div class="form-group"><label class="form-label">钉钉 AppSecret</label><input type="password" class="form-input" id="dingAppSecret" placeholder="请输入钉钉AppSecret"></div>
+          <div id="testResult"></div>
+        </div>
+        
+        <!-- 看板配置 -->
+        <div style="margin-bottom:20px;padding-bottom:20px;border-bottom:1px solid #f0f0f0">
+          <div style="font-weight:600;margin-bottom:14px;color:#333;font-size:15px">看板配置</div>
+          <div class="form-group"><label class="form-label">默认分配天数（拖拽人员时默认创建的天数）</label><input type="number" class="form-input" id="defaultAssignDays" value="1" min="1" max="30" style="width:120px"></div>
+        </div>
+        
+        <!-- 颜色配置 -->
+        <div style="margin-bottom:20px;padding-bottom:20px;border-bottom:1px solid #f0f0f0">
+          <div style="font-weight:600;margin-bottom:14px;color:#333;font-size:15px">颜色配置</div>
+          
+          <!-- 部门颜色配置 -->
+          <div style="margin-bottom:16px">
+            <div style="font-weight:500;margin-bottom:10px;font-size:13px;color:#666">部门人员颜色</div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px" id="deptColorGrid">
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:20px;height:20px;border-radius:4px;background:#722ed1"></div>
+                <span style="font-size:12px;flex:1">总经办</span>
+                <input type="color" id="deptColor_总经办" value="#722ed1" style="width:32px;height:28px;border:none;cursor:pointer;border-radius:4px">
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:20px;height:20px;border-radius:4px;background:#eb2f96"></div>
+                <span style="font-size:12px;flex:1">演艺制作部</span>
+                <input type="color" id="deptColor_演艺制作部" value="#eb2f96" style="width:32px;height:28px;border:none;cursor:pointer;border-radius:4px">
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:20px;height:20px;border-radius:4px;background:#fa8c16"></div>
+                <span style="font-size:12px;flex:1">项目管理组</span>
+                <input type="color" id="deptColor_项目管理组" value="#fa8c16" style="width:32px;height:28px;border:none;cursor:pointer;border-radius:4px">
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:20px;height:20px;border-radius:4px;background:#1890ff"></div>
+                <span style="font-size:12px;flex:1">前期美术</span>
+                <input type="color" id="deptColor_前期美术" value="#1890ff" style="width:32px;height:28px;border:none;cursor:pointer;border-radius:4px">
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:20px;height:20px;border-radius:4px;background:#52c41a"></div>
+                <span style="font-size:12px;flex:1">后期制作</span>
+                <input type="color" id="deptColor_后期制作" value="#52c41a" style="width:32px;height:28px;border:none;cursor:pointer;border-radius:4px">
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:20px;height:20px;border-radius:4px;background:#13c2c2"></div>
+                <span style="font-size:12px;flex:1">VJ组</span>
+                <input type="color" id="deptColor_VJ组" value="#13c2c2" style="width:32px;height:28px;border:none;cursor:pointer;border-radius:4px">
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:20px;height:20px;border-radius:4px;background:#f5222d"></div>
+                <span style="font-size:12px;flex:1">视觉工程部</span>
+                <input type="color" id="deptColor_视觉工程部" value="#f5222d" style="width:32px;height:28px;border:none;cursor:pointer;border-radius:4px">
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:20px;height:20px;border-radius:4px;background:#faad14"></div>
+                <span style="font-size:12px;flex:1">综合管理部</span>
+                <input type="color" id="deptColor_综合管理部" value="#faad14" style="width:32px;height:28px;border:none;cursor:pointer;border-radius:4px">
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:20px;height:20px;border-radius:4px;background:#722ed1"></div>
+                <span style="font-size:12px;flex:1">市场部</span>
+                <input type="color" id="deptColor_市场部" value="#722ed1" style="width:32px;height:28px;border:none;cursor:pointer;border-radius:4px">
+              </div>
+            </div>
+          </div>
+          
+          <div style="border-top:1px solid #f0f0f0;padding-top:16px;margin-top:8px">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">高亮冲突颜色</label>
+                <div style="display:flex;align-items:center;gap:10px">
+                  <input type="color" id="conflictColor" value="#ff4d4f" style="width:48px;height:40px;border:none;cursor:pointer;border-radius:8px">
+                  <input type="text" class="form-input" id="conflictColorText" value="#ff4d4f" style="width:110px" onchange="document.getElementById('conflictColor').value=this.value">
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">请假/调休 颜色</label>
+                <div style="display:flex;align-items:center;gap:10px">
+                  <input type="color" id="leaveColor" value="#333333" style="width:48px;height:40px;border:none;cursor:pointer;border-radius:8px">
+                  <input type="text" class="form-input" id="leaveColorText" value="#333333" style="width:110px" onchange="document.getElementById('leaveColor').value=this.value">
+                </div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">高亮透明度（0-100）</label>
+              <div style="display:flex;align-items:center;gap:10px">
+                <input type="number" class="form-input" id="conflictOpacity" value="30" min="0" max="100" style="width:100px">
+                <span style="color:#999;font-size:13px">值越大高亮越明显</span>
+              </div>
+            </div>
+            <div class="form-group" style="margin-top:12px">
+              <label class="form-label">出差颜色</label>
+              <div style="display:flex;align-items:center;gap:10px">
+                <input type="color" id="businessTripColor" value="#00b8d9" style="width:48px;height:40px;border:none;cursor:pointer;border-radius:8px">
+                <input type="text" class="form-input" id="businessTripColorText" value="#00b8d9" style="width:110px" onchange="document.getElementById('businessTripColor').value=this.value">
+                <span style="color:#666;font-size:12px">出差日期范围内的颜色</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- 请假同步设置 -->
+        <div>
+          <div style="font-weight:600;margin-bottom:14px;color:#333;font-size:15px">请假同步设置</div>
+          <div class="form-group">
+            <label style="display:flex;align-items:center;cursor:pointer">
+              <input type="checkbox" id="leaveSyncEnabled" checked style="margin-right:10px;width:18px;height:18px">
+              <span>启用自动同步请假状态</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label">同步间隔（小时）</label>
+            <div style="display:flex;align-items:center;gap:10px">
+              <input type="number" class="form-input" id="leaveSyncInterval" value="4" min="1" max="24" style="width:100px">
+              <span style="color:#999;font-size:13px">每隔指定小时自动同步一次</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-default" onclick="testDingtalk()">测试连接</button>
+        <button class="btn btn-primary" onclick="saveConfig()">保存配置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 钉钉同步弹窗 -->
+  <div class="modal-overlay" id="syncModal">
+    <div class="modal" style="max-width: 800px;">
+      <div class="modal-header">
+        <div class="modal-title">👥 钉钉人员同步</div>
+        <button class="modal-close" onclick="hideModal('syncModal')">×</button>
+      </div>
+      <div class="modal-body">
+        <div style="margin-bottom:16px">
+          <button class="btn btn-primary" onclick="fetchDingUsers()"><i>🔄</i>从钉钉获取人员</button>
+          <span id="syncStatus" style="margin-left:14px;color:#666;font-size:13px"></span>
+        </div>
+        <div style="margin-bottom:14px;display:flex;align-items:center;gap:12px">
+          <select class="form-input" id="filterDept" style="width:auto;display:inline-block" onchange="renderDingUsers()">
+            <option value="">全部部门</option>
+            <option value="总经办">总经办</option>
+            <option value="演艺制作部">演艺制作部</option>
+            <option value="项目管理组">项目管理组</option>
+            <option value="前期美术">前期美术</option>
+            <option value="后期制作">后期制作</option>
+            <option value="VJ组">VJ组</option>
+            <option value="视觉工程部">视觉工程部</option>
+            <option value="综合管理部">综合管理部</option>
+            <option value="市场部">市场部</option>
+          </select>
+          <label style="display:flex;align-items:center;cursor:pointer;font-size:13px;color:#666">
+            <input type="checkbox" id="selectAllDing" checked style="margin-right:6px" onchange="toggleSelectAllDing()">全选
+          </label>
+          <span id="filteredCount" style="color:#999;font-size:12px"></span>
+        </div>
+        <div style="max-height:400px;overflow-y:auto;border:1px solid #e8e8e8;border-radius:8px">
+          <table>
+            <thead><tr><th width="50">选择</th><th>姓名</th><th>部门</th></tr></thead>
+            <tbody id="dingUserList"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-default" onclick="hideModal('syncModal')">取消</button>
+        <button class="btn btn-primary" onclick="syncSelectedUsers()">确认同步</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 测试请假弹窗 -->
+  <div class="modal-overlay" id="leaveTestModal">
+    <div class="modal" style="max-width: 500px;">
+      <div class="modal-header">
+        <div class="modal-title">📋 测试请假设置</div>
+        <button class="modal-close" onclick="hideModal('leaveTestModal')">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">选择人员 *</label>
+          <select class="form-input" id="leaveTestPerson" onchange="updateLeaveTestPersonInfo()">
+            <option value="">-- 请选择人员 --</option>
+          </select>
+          <div id="leaveTestPersonInfo" style="margin-top:8px;font-size:12px;color:#666"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">请假类型 *</label>
+          <select class="form-input" id="leaveTestType">
+            <option value="请假">请假</option>
+            <option value="调休">调休</option>
+            <option value="年假">年假</option>
+            <option value="病假">病假</option>
+            <option value="事假">事假</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">开始日期 *</label>
+            <input type="date" class="form-input" id="leaveTestStart">
+          </div>
+          <div class="form-group">
+            <label class="form-label">结束日期 *</label>
+            <input type="date" class="form-input" id="leaveTestEnd">
+          </div>
+        </div>
+        <div class="alert alert-success" style="margin-top:16px">
+          <i>💡</i>
+          <span>此功能仅用于测试请假显示效果，设置后会立即生效。请假日期过期后会自动恢复。</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-default" onclick="hideModal('leaveTestModal')">取消</button>
+        <button class="btn btn-danger" onclick="clearPersonLeave()">清空请假</button>
+        <button class="btn btn-primary" onclick="saveTestLeave()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 编辑请假弹窗 -->
+  <div class="modal-overlay" id="editLeaveModal">
+    <div class="modal" style="max-width: 500px;">
+      <div class="modal-header">
+        <div class="modal-title">✏️ 编辑请假记录</div>
+        <button class="modal-close" onclick="hideModal('editLeaveModal')">×</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="editLeaveId">
+        <div class="form-group">
+          <label class="form-label">人员</label>
+          <div id="editLeavePersonName" style="padding:12px;background:#f5f5f5;border-radius:8px;font-weight:500"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">请假类型 *</label>
+          <select class="form-input" id="editLeaveType">
+            <option value="请假">请假</option>
+            <option value="调休">调休</option>
+            <option value="年假">年假</option>
+            <option value="病假">病假</option>
+            <option value="事假">事假</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">开始日期 *</label>
+            <input type="date" class="form-input" id="editLeaveStart">
+          </div>
+          <div class="form-group">
+            <label class="form-label">结束日期 *</label>
+            <input type="date" class="form-input" id="editLeaveEnd">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-default" onclick="hideModal('editLeaveModal')">取消</button>
+        <button class="btn btn-primary" onclick="updateTestLeave()">保存修改</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const colors = ['#1890ff', '#52c41a', '#faad14', '#f5222d', '#722ed1', '#13c2c2', '#eb2f96', '#fa8c16'];
+    let selectedColor = colors[0];
+    let projects = [];
+    let persons = [];
+    let assignments = [];
+    let leaveRecords = []; // 请假记录列表
+
+    // 部门配置
+    const deptConfig = [
+      { name: '总经办', color: '#722ed1' },
+      { name: '演艺制作部', color: '#eb2f96' },
+      { name: '项目管理组', color: '#fa8c16' },
+      { name: '前期美术', color: '#1890ff' },
+      { name: '后期制作', color: '#52c41a' },
+      { name: 'VJ组', color: '#13c2c2' },
+      { name: '视觉工程部', color: '#f5222d' },
+      { name: '综合管理部', color: '#faad14' },
+      { name: '市场部', color: '#722ed1' },
+      { name: '其他', color: '#999' }
+    ];
+
+    async function loadProjects() {
+      try {
+        const res = await fetch('/api/projects');
+        projects = await res.json();
+        renderProjects();
+      } catch (e) {
+        console.warn('[loadProjects] 加载失败，10秒后重试:', e.message);
+        setTimeout(loadProjects, 10000);
+      }
+    }
+
+    async function loadPersons() {
+      try {
+        const res = await fetch('/api/persons');
+        persons = await res.json();
+        renderPersons();
+        updateLeaveRecords();
+      } catch (e) {
+        console.warn('[loadPersons] 加载失败，10秒后重试:', e.message);
+        setTimeout(loadPersons, 10000);
+      }
+    }
+
+    async function loadAssignments() {
+      try {
+        const res = await fetch('/api/assignments');
+        assignments = await res.json();
+      } catch (e) {
+        console.warn('[loadAssignments] 加载失败，10秒后重试:', e.message);
+        setTimeout(loadAssignments, 10000);
+      }
+    }
+
+    function renderProjects() {
+      document.getElementById('projectCount').textContent = `${projects.length} 个`;
+      const tbody = document.getElementById('projectBody');
+      if (projects.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#999;padding:30px">暂无项目</td></tr>';
+        return;
+      }
+      const sortedProjects = [...projects].sort((a, b) => parseInt(b.id) - parseInt(a.id));
+      tbody.innerHTML = sortedProjects.map(p => {
+        // 解析出差人员ID为姓名
+        var tripPersons = '';
+        if (p.business_trip == 1 && p.business_trip_persons) {
+          try {
+            var personIds = JSON.parse(p.business_trip_persons);
+            var personNames = personIds.map(function(id) {
+              var person = persons.find(function(pp) { return pp.id === id; });
+              return person ? person.name : '';
+            }).filter(function(n) { return n; });
+            tripPersons = personNames.join('、');
+          } catch(e) { tripPersons = ''; }
+        }
+        
+        return '<tr>' +
+          '<td>' +
+            '<div style="display:flex;align-items:center;gap:10px">' +
+              '<div style="width:14px;height:14px;border-radius:3px;background:' + (p.color||'#1890ff') + '"></div>' +
+              '<span style="font-weight:500">' + p.name + '</span>' +
+            '</div>' +
+          '</td>' +
+          '<td style="color:#666">' + p.start_date + '</td>' +
+          '<td style="color:#666">' + p.end_date + '</td>' +
+          '<td>' + (p.business_trip == 1 ? '<span style="color:#00b8d9;font-weight:600">✈️ 是</span>' : '<span style="color:#999">—</span>') + '</td>' +
+          '<td style="color:#666">' + (p.business_trip_start || '') + '</td>' +
+          '<td style="color:#666;font-size:13px">' + (tripPersons || '<span style="color:#999">—</span>') + '</td>' +
+          '<td style="text-align:right">' +
+            '<button class="btn btn-default btn-sm" style="margin-right:6px" onclick="editProject(\'' + p.id + '\')">编辑</button>' +
+            '<button class="btn btn-warning btn-sm" style="margin-right:6px" onclick="showBusinessTripModal(\'' + p.id + '\')" title="出差">✈️</button>' +
+            '<button class="btn btn-danger btn-sm" onclick="deleteProject(\'' + p.id + '\')">删除</button>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+    }
+    
+    let editingProjectId = null;
+    let selectedBusinessTripPersons = [];  // 当前选择的出差人员
+    
+    function editProject(id) {
+      editingProjectId = id;
+      const project = projects.find(p => p.id === id);
+      if (!project) return;
+      document.getElementById('projectName').value = project.name;
+      document.getElementById('projectStart').value = project.start_date;
+      document.getElementById('projectEnd').value = project.end_date;
+      selectColor(project.color || colors[0]);
+      document.getElementById('projectModalTitle').textContent = '编辑项目';
+      document.getElementById('projectModal').style.display = 'flex';
+    }
+    
+    // 显示出差编辑弹窗
+    function showBusinessTripModal(projectId) {
+      const project = projects.find(p => p.id === projectId);
+      if (!project) return;
+      
+      document.getElementById('btProjectId').value = projectId;
+      document.getElementById('btProjectName').textContent = project.name;
+      
+      // 加载出差信息
+      const hasBusinessTrip = project.business_trip == 1;
+      document.getElementById('projectBusinessTrip').checked = hasBusinessTrip;
+      
+      if (hasBusinessTrip) {
+        // 如果有出差信息，使用数据库的值
+        document.getElementById('projectBusinessTripStart').value = project.business_trip_start || project.start_date;
+        document.getElementById('projectBusinessTripEnd').value = project.business_trip_end || project.end_date;
+        try {
+          selectedBusinessTripPersons = project.business_trip_persons ? JSON.parse(project.business_trip_persons) : [];
+        } catch(e) { selectedBusinessTripPersons = []; }
+      } else {
+        // 如果没有出差信息，默认与项目日期一致
+        document.getElementById('projectBusinessTripStart').value = project.start_date;
+        document.getElementById('projectBusinessTripEnd').value = project.end_date;
+        selectedBusinessTripPersons = [];
+      }
+      
+      renderBusinessTripPersons();
+      toggleBusinessTripDates();
+      document.getElementById('businessTripModal').style.display = 'flex';
+    }
+    
+    // 保存出差信息
+    async function saveBusinessTrip() {
+      const projectId = document.getElementById('btProjectId').value;
+      const businessTrip = document.getElementById('projectBusinessTrip').checked ? 1 : 0;
+      let businessTripStart = document.getElementById('projectBusinessTripStart').value;
+      let businessTripEnd = document.getElementById('projectBusinessTripEnd').value;
+      
+      // 如果没有勾选出差，清空出差信息
+      if (businessTrip === 0) {
+        businessTripStart = '';
+        businessTripEnd = '';
+        selectedBusinessTripPersons = [];
+      }
+      
+      const projectData = {
+        businessTrip,
+        businessTripStart,
+        businessTripEnd,
+        businessTripPersons: selectedBusinessTripPersons
+      };
+      
+      try {
+        await fetch('/api/projects/' + projectId, {
+          method: 'PUT',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(projectData)
+        });
+        hideModal('businessTripModal');
+        loadProjects();
+        alert('出差信息已保存');
+      } catch(e) {
+        alert('保存失败: ' + e.message);
+      }
+    }
+    
+    function toggleBusinessTripDates() {
+      const show = document.getElementById('projectBusinessTrip').checked;
+      document.getElementById('businessTripDates').style.display = show ? 'flex' : 'none';
+    }
+
+    // 渲染出差人员选择列表 - 只显示前期美术和后期制作
+    function renderBusinessTripPersons() {
+      const container = document.getElementById('businessTripPersonList');
+      
+      if (!persons || persons.length === 0) {
+        container.innerHTML = '<div style="grid-column:1/-1;color:#999;font-size:14px;text-align:center;padding:40px">暂无人员</div>';
+        document.getElementById('btPersonCount').textContent = '';
+        return;
+      }
+      
+      // 按部门分组，只取前期美术和后期制作
+      var leftDeptName = '前期美术';
+      var rightDeptName = '后期制作';
+      var leftDept = deptConfig.find(function(d) { return d.name === leftDeptName; });
+      var rightDept = deptConfig.find(function(d) { return d.name === rightDeptName; });
+      
+      var leftPersons = persons.filter(function(p) {
+        return p.group_type === leftDeptName || (p.department && p.department.indexOf(leftDeptName) >= 0);
+      });
+      var rightPersons = persons.filter(function(p) {
+        return p.group_type === rightDeptName || (p.department && p.department.indexOf(rightDeptName) >= 0);
+      });
+      
+      // 更新已选人数
+      var totalCount = leftPersons.length + rightPersons.length;
+      document.getElementById('btPersonCount').textContent = '已选 ' + selectedBusinessTripPersons.length + ' / ' + totalCount + ' 人';
+      
+      // 渲染单个部门列
+      function renderDeptColumn(deptName, deptColor, personList) {
+        var html = '<div style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08)">';
+        
+        // 部门头部
+        html += '<div style="padding:14px 16px;background:' + deptColor + ';display:flex;align-items:center;justify-content:space-between">';
+        html += '<div style="display:flex;align-items:center;gap:10px">';
+        html += '<span style="width:32px;height:32px;background:rgba(255,255,255,0.3);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:bold;color:white">' + deptName.charAt(0) + '</span>';
+        html += '<span style="font-size:15px;font-weight:600;color:white">' + deptName + '</span>';
+        html += '</div>';
+        html += '<span style="background:rgba(255,255,255,0.3);padding:4px 12px;border-radius:20px;font-size:12px;color:white;font-weight:500">' + personList.length + '人</span>';
+        html += '</div>';
+        
+        // 人员列表
+        html += '<div style="padding:8px">';
+        
+        if (personList.length === 0) {
+          html += '<div style="padding:20px;text-align:center;color:#999;font-size:13px">暂无人员</div>';
+        } else {
+          personList.forEach(function(p) {
+            var isSelected = selectedBusinessTripPersons.indexOf(p.id) >= 0;
+            var bgColor = isSelected ? '#e6f7ff' : 'transparent';
+            var borderColor = isSelected ? deptColor : '#eee';
+            var checkBg = isSelected ? deptColor : '#fff';
+            var checkBorder = isSelected ? deptColor : '#ccc';
+            var checkMark = isSelected ? '<span style="color:white;font-size:11px;font-weight:bold">✓</span>' : '';
+            
+            html += '<div onclick="toggleBusinessTripPerson(\'' + p.id + '\')" ';
+            html += 'style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:8px;cursor:pointer;margin-bottom:4px;';
+            html += 'background:' + bgColor + ';border:2px solid ' + borderColor + ';transition:all 0.2s" ';
+            html += 'onmouseover="this.style.background=\'' + (isSelected ? '#b3e0ff' : '#f5f9ff') + '\'" ';
+            html += 'onmouseout="this.style.background=\'' + bgColor + '\'">';
+            
+            // 头像
+            html += '<div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,' + deptColor + ',' + deptColor + '88);display:flex;align-items:center;justify-content:center;color:white;font-weight:600;font-size:14px;box-shadow:0 2px 4px rgba(0,0,0,0.1)">' + (p.name ? p.name.charAt(0).toUpperCase() : '?') + '</div>';
+            
+            // 姓名
+            html += '<span style="font-size:14px;color:#333;font-weight:500;flex:1">' + p.name + '</span>';
+            
+            // 勾选框
+            html += '<div style="width:22px;height:22px;border-radius:6px;border:2px solid ' + checkBorder + ';background:' + checkBg + ';display:flex;align-items:center;justify-content:center;flex-shrink:0">' + checkMark + '</div>';
+            
+            html += '</div>';
+          });
+        }
+        
+        html += '</div></div>';
+        return html;
+      }
+      
+      var leftHtml = renderDeptColumn(leftDeptName, leftDept.color, leftPersons);
+      var rightHtml = renderDeptColumn(rightDeptName, rightDept.color, rightPersons);
+      
+      container.innerHTML = leftHtml + rightHtml;
+    }
+    
+    // 搜索出差人员（保留但简化）
+    function filterBusinessTripPersons() {
+      renderBusinessTripPersons();
+    }
+
+    // 切换出差人员选择
+    function toggleBusinessTripPerson(personId) {
+      const idx = selectedBusinessTripPersons.indexOf(personId);
+      if (idx >= 0) {
+        selectedBusinessTripPersons.splice(idx, 1);
+      } else {
+        selectedBusinessTripPersons.push(personId);
+      }
+      renderBusinessTripPersons();
+    }
+
+    function renderPersons() {
+      document.getElementById('personCount').textContent = `${persons.length} 人`;
+      
+      // 按部门分组
+      const deptGroups = {};
+      deptConfig.forEach(d => deptGroups[d.name] = []);
+      
+      persons.forEach(p => {
+        const dept = p.department || '';
+        let found = false;
+        for (const d of deptConfig) {
+          if (dept.includes(d.name) || p.group_type === d.name) {
+            deptGroups[d.name].push(p);
+            found = true;
+            break;
+          }
+        }
+        if (!found) deptGroups['其他'].push(p);
+      });
+
+      let html = '';
+      for (const dept of deptConfig) {
+        const groupPersons = deptGroups[dept.name];
+        if (groupPersons.length === 0 && dept.name !== '其他') continue;
+        
+        const isOther = dept.name === '其他';
+        html += `<div class="dept-section">`;
+        html += `
+          <div class="dept-header" onclick="toggleDept('${dept.name}')">
+            <div class="dept-icon" style="background:${dept.color}">👥</div>
+            <span class="dept-name">${dept.name}</span>
+            <span class="dept-count">${groupPersons.length}人</span>
+            <span class="dept-toggle" id="toggle_${dept.name.replace(/\s/g, '_')}">▼</span>
+          </div>
+          <div class="dept-content" id="content_${dept.name.replace(/\s/g, '_')}">
+            <div class="person-grid">
+        `;
+        
+        if (groupPersons.length === 0) {
+          html += `<div style="padding:20px;color:#999;text-align:center;font-size:13px">暂无人员</div>`;
+        } else {
+          groupPersons.forEach(p => {
+            const initial = p.name ? p.name.charAt(0).toUpperCase() : '?';
+            const leaveBadge = p.leave_status ? `<span class="tag tag-leave">${p.leave_status}</span>` : '';
+            html += `
+              <div class="person-card">
+                <div class="person-avatar" style="background:linear-gradient(135deg, ${dept.color}, ${dept.color}99)">${initial}</div>
+                <div class="person-info">
+                  <div class="person-name">${p.name}${leaveBadge}</div>
+                  <div class="person-dept">${p.department || '无部门'}</div>
+                </div>
+                <button class="btn btn-danger btn-sm" onclick="deletePerson('${p.id}')" title="删除">✕</button>
+              </div>
+            `;
+          });
+        }
+        
+        html += `</div></div></div>`;
+      }
+
+      document.getElementById('personList').innerHTML = html || '<div class="empty-state"><i>👥</i><p>暂无人员，请先从钉钉同步</p></div>';
+    }
+
+    function toggleDept(deptName) {
+      const contentId = 'content_' + deptName.replace(/\s/g, '_');
+      const toggleId = 'toggle_' + deptName.replace(/\s/g, '_');
+      const content = document.getElementById(contentId);
+      const toggle = document.getElementById(toggleId);
+      if (content.classList.contains('collapsed')) {
+        content.classList.remove('collapsed');
+        toggle.classList.remove('collapsed');
+      } else {
+        content.classList.add('collapsed');
+        toggle.classList.add('collapsed');
+      }
+    }
+
+    // 更新请假记录列表（只显示今天及未来的请假）
+    function updateLeaveRecords() {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      leaveRecords = persons.filter(p => {
+        if (!p.leave_status || !p.leave_start) return false;
+        // 解析请假结束日期
+        const leaveEnd = new Date(p.leave_end);
+        leaveEnd.setHours(0, 0, 0, 0);
+        // 只显示结束日期 >= 今天 的请假（即还没过期的）
+        return leaveEnd >= today;
+      });
+      
+      document.getElementById('leaveRecordCount').textContent = `${leaveRecords.length} 条`;
+      
+      if (leaveRecords.length === 0) {
+        document.getElementById('leaveRecordList').innerHTML = `
+          <div class="empty-state">
+            <i>📋</i>
+            <p>暂无请假记录</p>
+          </div>
+        `;
+        return;
+      }
+      
+      let html = '<div class="leave-list">';
+      leaveRecords.forEach(record => {
+        const deptInfo = deptConfig.find(d => d.name === record.group_type) || { color: '#999' };
+        html += `
+          <div class="leave-item">
+            <div class="person-avatar" style="background:linear-gradient(135deg, ${deptInfo.color}, ${deptInfo.color}99);width:40px;height:40px;font-size:16px">
+              ${record.name ? record.name.charAt(0).toUpperCase() : '?'}
+            </div>
+            <div style="flex:1">
+              <div style="font-weight:600;color:#333;font-size:14px">${record.name}</div>
+              <div style="font-size:12px;color:#999">${record.department || '无部门'}</div>
+            </div>
+            <div class="leave-type-badge">${record.leave_status}</div>
+            <div class="leave-dates">
+              <i>📅</i>
+              <span>${record.leave_start} ~ ${record.leave_end}</span>
+            </div>
+            <div class="leave-actions">
+              <button class="btn btn-default btn-sm" onclick="editLeaveRecord('${record.id}')" title="编辑">✏️</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteLeaveRecord('${record.id}')" title="删除">🗑️</button>
+            </div>
+          </div>
+        `;
+      });
+      html += '</div>';
+      document.getElementById('leaveRecordList').innerHTML = html;
+    }
+
+    // 编辑请假记录
+    function editLeaveRecord(personId) {
+      const person = persons.find(p => p.id === personId);
+      if (!person) return;
+      
+      document.getElementById('editLeaveId').value = personId;
+      document.getElementById('editLeavePersonName').textContent = `${person.name} (${person.department || '无部门'})`;
+      document.getElementById('editLeaveType').value = person.leave_status || '请假';
+      document.getElementById('editLeaveStart').value = person.leave_start || '';
+      document.getElementById('editLeaveEnd').value = person.leave_end || '';
+      
+      document.getElementById('editLeaveModal').style.display = 'flex';
+    }
+
+    // 更新请假记录
+    async function updateTestLeave() {
+      const personId = document.getElementById('editLeaveId').value;
+      const leaveType = document.getElementById('editLeaveType').value;
+      const startDate = document.getElementById('editLeaveStart').value;
+      const endDate = document.getElementById('editLeaveEnd').value;
+      
+      if (!startDate || !endDate) {
+        alert('请选择请假日期');
+        return;
+      }
+      
+      try {
+        const res = await fetch('/api/leave/set', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            personId: personId,
+            leaveStatus: leaveType,
+            leaveStart: startDate,
+            leaveEnd: endDate,
+            leaveType: leaveType
+          })
+        });
+        const result = await res.json();
+        
+        if (result.success) {
+          alert('请假记录已更新！');
+          hideModal('editLeaveModal');
+          loadPersons();
+        } else {
+          alert('更新失败: ' + result.message);
+        }
+      } catch (e) {
+        alert('请求失败: ' + e.message);
+      }
+    }
+
+    // 删除请假记录
+    async function deleteLeaveRecord(personId) {
+      if (!confirm('确定要删除此请假记录吗？')) return;
+      
+      try {
+        const res = await fetch('/api/leave/set', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            personId: personId,
+            leaveStatus: '',
+            leaveStart: '',
+            leaveEnd: '',
+            leaveType: ''
+          })
+        });
+        const result = await res.json();
+        
+        if (result.success) {
+          alert('请假记录已删除');
+          loadPersons();
+        } else {
+          alert('删除失败: ' + result.message);
+        }
+      } catch (e) {
+        alert('请求失败: ' + e.message);
+      }
+    }
+
+    function renderColorPicker() {
+      document.getElementById('colorPicker').innerHTML = colors.map(c =>
+        `<div class="color-dot ${c === selectedColor ? 'active' : ''}" style="background:${c}" onclick="selectColor('${c}')"></div>`
+      ).join('');
+    }
+
+    function selectColor(c) { selectedColor = c; renderColorPicker(); }
+
+    function formatDate(date) {
+      const d = new Date(date);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
+    function getTomorrow() {
+      const d = new Date();
+      d.setDate(d.getDate() + 1);
+      return formatDate(d);
+    }
+
+    function getToday() {
+      return formatDate(new Date());
+    }
+
+    function showProjectModal() {
+      editingProjectId = null;
+      renderColorPicker();
+      document.getElementById('projectName').value = '';
+      const today = getToday();
+      const tomorrow = getTomorrow();
+      document.getElementById('projectStart').value = today;
+      document.getElementById('projectEnd').value = tomorrow;
+      document.getElementById('projectModalTitle').textContent = '添加项目';
+      document.getElementById('projectModal').style.display = 'flex';
+    }
+
+    function showConfigModal() {
+      loadConfig();
+      document.getElementById('configModal').style.display = 'flex';
+    }
+
+    async function loadConfig() {
+      try {
+        const res = await fetch('/api/config');
+        const config = await res.json();
+        document.getElementById('dingAppKey').value = config.ding_appKey || '';
+        document.getElementById('dingAppSecret').value = config.ding_appSecret || '';
+        document.getElementById('defaultAssignDays').value = config.default_assign_days || '1';
+        document.getElementById('conflictColor').value = config.conflict_color || '#ff4d4f';
+        document.getElementById('conflictColorText').value = config.conflict_color || '#ff4d4f';
+        document.getElementById('conflictOpacity').value = config.conflict_opacity || '30';
+        document.getElementById('leaveColor').value = config.leave_color || '#333333';
+        document.getElementById('leaveColorText').value = config.leave_color || '#333333';
+        document.getElementById('businessTripColor').value = config.business_trip_color || '#00b8d9';
+        document.getElementById('businessTripColorText').value = config.business_trip_color || '#00b8d9';
+        
+        // 加载部门颜色配置
+        const deptColors = config.dept_colors ? JSON.parse(config.dept_colors) : {};
+        deptConfig.forEach(d => {
+          const input = document.getElementById('deptColor_' + d.name);
+          if (input) {
+            input.value = deptColors[d.name] || d.color;
+          }
+        });
+      } catch (e) {}
+      loadLeaveSchedule();
+    }
+    
+    document.getElementById('conflictColor').addEventListener('input', function() { document.getElementById('conflictColorText').value = this.value; });
+    document.getElementById('leaveColor').addEventListener('input', function() { document.getElementById('leaveColorText').value = this.value; });
+
+    function hideModal(id) { document.getElementById(id).style.display = 'none'; }
+
+    async function saveProject() {
+      const name = document.getElementById('projectName').value.trim();
+      const startDate = document.getElementById('projectStart').value;
+      const endDate = document.getElementById('projectEnd').value;
+      if (!name || !startDate || !endDate) { alert('请填写必填项'); return; }
+      
+      // 校验结束日期不能早于起始日期
+      if (endDate < startDate) {
+        alert('结束日期不能早于起始日期');
+        return;
+      }
+      
+      const projectData = {
+        name, startDate, endDate, color: selectedColor
+      };
+      
+      if (editingProjectId) {
+        await fetch('/api/projects/' + editingProjectId, {
+          method: 'PUT',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(projectData)
+        });
+      } else {
+        await fetch('/api/projects', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(projectData)
+        });
+      }
+      hideModal('projectModal');
+      loadProjects();
+      alert('项目已保存');
+    }
+
+    async function deleteProject(id) {
+      if (!confirm('确定删除此项目？')) return;
+      await fetch('/api/projects/' + id, {method: 'DELETE'});
+      loadProjects();
+    }
+
+    async function deletePerson(id) {
+      if (!confirm('确定删除此人员？')) return;
+      await fetch('/api/persons/' + id, {method: 'DELETE'});
+      loadPersons();
+    }
+
+    async function saveConfig() {
+      // 收集部门颜色配置
+      const deptColors = {};
+      deptConfig.forEach(d => {
+        const input = document.getElementById('deptColor_' + d.name);
+        if (input) {
+          deptColors[d.name] = input.value;
+        }
+      });
+      
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          ding_appKey: document.getElementById('dingAppKey').value,
+          ding_appSecret: document.getElementById('dingAppSecret').value,
+          default_assign_days: document.getElementById('defaultAssignDays').value,
+          dept_colors: JSON.stringify(deptColors),
+          conflict_color: document.getElementById('conflictColor').value,
+          conflict_opacity: document.getElementById('conflictOpacity').value,
+          leave_color: document.getElementById('leaveColor').value,
+          business_trip_color: document.getElementById('businessTripColor').value
+        })
+      });
+      await saveLeaveSchedule();
+      hideModal('configModal');
+      alert('配置已保存');
+    }
+
+    async function testDingtalk() {
+      const appKey = document.getElementById('dingAppKey').value.trim();
+      const appSecret = document.getElementById('dingAppSecret').value.trim();
+      if (!appKey || !appSecret) {
+        document.getElementById('testResult').innerHTML = '<div class="alert alert-error"><i>✕</i>请填写 AppKey 和 AppSecret</div>';
+        return;
+      }
+      try {
+        const res = await fetch('/api/dingtalk/test', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({appKey, appSecret})
+        });
+        const data = await res.json();
+        if (data.success) {
+          document.getElementById('testResult').innerHTML = '<div class="alert alert-success"><i>✓</i>连接成功</div>';
+        } else {
+          document.getElementById('testResult').innerHTML = '<div class="alert alert-error"><i>✕</i>连接失败：' + data.message + '</div>';
+        }
+      } catch (e) {
+        document.getElementById('testResult').innerHTML = '<div class="alert alert-error"><i>✕</i>请求失败：' + e.message + '</div>';
+      }
+    }
+
+    async function clearAllData() {
+      if (!confirm('确定清空所有数据？此操作不可恢复！')) return;
+      for (const p of projects) await fetch('/api/projects/' + p.id, {method: 'DELETE'});
+      for (const p of persons) await fetch('/api/persons/' + p.id, {method: 'DELETE'});
+      loadProjects();
+      loadPersons();
+      alert('数据已清空');
+    }
+
+    // 钉钉同步
+    let dingUsers = [];
+    function showSyncModal() {
+      dingUsers = [];
+      document.getElementById('dingUserList').innerHTML = '<tr><td colspan="3" style="text-align:center;color:#999;padding:30px">点击"从钉钉获取人员"按钮获取数据</td></tr>';
+      document.getElementById('syncStatus').textContent = '';
+      document.getElementById('filteredCount').textContent = '';
+      document.getElementById('filterDept').value = '';
+      document.getElementById('selectAllDing').checked = true;
+      document.getElementById('syncModal').style.display = 'flex';
+    }
+
+    async function fetchDingUsers() {
+      const appKey = document.getElementById('dingAppKey')?.value || localStorage.getItem('ding_appKey') || '';
+      const appSecret = document.getElementById('dingAppSecret')?.value || localStorage.getItem('ding_appSecret') || '';
+      if (!appKey || !appSecret) {
+        alert('请先在系统配置中填写钉钉 AppKey 和 AppSecret');
+        return;
+      }
+      document.getElementById('syncStatus').textContent = '正在获取...';
+      try {
+        const res = await fetch('/api/dingtalk/users', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({appKey, appSecret})
+        });
+        const data = await res.json();
+        if (data.success) {
+          dingUsers = data.data;
+          renderDingUsers();
+          document.getElementById('syncStatus').textContent = `✓ 获取成功，共 ${dingUsers.length} 人`;
+          document.getElementById('syncStatus').style.color = '#52c41a';
+        } else {
+          document.getElementById('syncStatus').textContent = '✕ 获取失败：' + data.message;
+          document.getElementById('syncStatus').style.color = '#ff4d4f';
+        }
+      } catch (e) {
+        document.getElementById('syncStatus').textContent = '✕ 请求失败：' + e.message;
+        document.getElementById('syncStatus').style.color = '#ff4d4f';
+      }
+    }
+
+    function renderDingUsers() {
+      const filterDept = document.getElementById('filterDept').value;
+      let filteredUsers = dingUsers;
+      if (filterDept) {
+        filteredUsers = dingUsers.filter(u => (u.department || '').includes(filterDept));
+      }
+      document.getElementById('filteredCount').textContent = `显示 ${filteredUsers.length} / ${dingUsers.length} 人`;
+      
+      if (filteredUsers.length === 0) {
+        document.getElementById('dingUserList').innerHTML = '<tr><td colspan="3" style="text-align:center;color:#999;padding:30px">暂无数据</td></tr>';
+        return;
+      }
+      document.getElementById('dingUserList').innerHTML = filteredUsers.map((u, i) => `
+        <tr>
+          <td><input type="checkbox" id="dingCheck${i}" data-index="${dingUsers.indexOf(u)}" checked></td>
+          <td><span style="font-weight:500">${u.name}</span></td>
+          <td style="color:#666">${u.department || '-'}</td>
+        </tr>
+      `).join('');
+    }
+
+    function toggleSelectAllDing() {
+      const checked = document.getElementById('selectAllDing').checked;
+      document.querySelectorAll('[id^="dingCheck"]').forEach(cb => cb.checked = checked);
+    }
+
+    async function syncSelectedUsers() {
+      const selected = [];
+      const deptMapping = {
+        '总经办': '总经办', '演艺制作部': '演艺制作部', '项目管理组': '项目管理组',
+        '前期美术': '前期美术', '后期制作': '后期制作', 'VJ组': 'VJ组',
+        '视觉工程部': '视觉工程部', '综合管理部': '综合管理部', '市场部': '市场部'
+      };
+
+      document.querySelectorAll('[id^="dingCheck"]').forEach(checkbox => {
+        if (checkbox.checked) {
+          const originalIndex = parseInt(checkbox.dataset.index);
+          const u = dingUsers[originalIndex];
+          const deptName = u.department || '';
+          let deptGroup = '其他';
+          for (const [dept, group] of Object.entries(deptMapping)) {
+            if (deptName.includes(dept)) { deptGroup = group; break; }
+          }
+          selected.push({
+            id: u.dingId || u.id,
+            name: u.name,
+            groupType: deptGroup,
+            dingId: u.dingId || u.id,
+            department: u.department
+          });
+        }
+      });
+
+      if (selected.length === 0) { alert('请至少选择一个人员'); return; }
+
+      let success = 0;
+      for (const person of selected) {
+        try {
+          await fetch('/api/persons', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(person)
+          });
+          success++;
+        } catch (e) { console.error('Failed to sync:', person.name, e); }
+      }
+
+      hideModal('syncModal');
+      loadPersons();
+      alert(`成功同步 ${success} 名人员`);
+    }
+
+    // 请假状态同步
+    let leaveSyncStatus = null;
+    
+    async function syncLeaveNow() {
+      // 先获取钉钉配置
+      let appKey = '', appSecret = '';
+      try {
+        const configRes = await fetch('/api/config');
+        const configData = await configRes.json();
+        appKey = configData.ding_appKey || '';
+        appSecret = configData.ding_appSecret || '';
+      } catch (e) {
+        console.error('获取配置失败:', e);
+      }
+      
+      if (!appKey || !appSecret) {
+        // 创建错误提示
+        const toast = document.createElement('div');
+        toast.style.cssText = 'position:fixed;top:80px;right:24px;background:linear-gradient(135deg, #fff1f0, #ffccc7);padding:16px 24px;border-radius:10px;box-shadow:0 4px 20px rgba(0,0,0,0.15);z-index:2000;display:flex;align-items:center;gap:10px;animation:slideIn 0.3s ease';
+        toast.innerHTML = '<span style="font-size:18px">⚠️</span><span>请先在系统配置中填写钉钉凭据</span>';
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 4000);
+        return;
+      }
+      
+      // 创建状态提示
+      if (!document.getElementById('syncLeaveToast')) {
+        const toast = document.createElement('div');
+        toast.id = 'syncLeaveToast';
+        toast.style.cssText = 'position:fixed;top:80px;right:24px;background:white;padding:16px 24px;border-radius:10px;box-shadow:0 4px 20px rgba(0,0,0,0.15);z-index:2000;display:flex;align-items:center;gap:10px;animation:slideIn 0.3s ease';
+        toast.innerHTML = '<span style="font-size:18px">🔄</span><span id="syncLeaveText">正在同步请假状态...</span>';
+        document.body.appendChild(toast);
+        
+        if (!document.getElementById('toastStyle')) {
+          const style = document.createElement('style');
+          style.id = 'toastStyle';
+          style.textContent = '@keyframes slideIn { from { opacity:0;transform:translateX(100px); } to { opacity:1;transform:translateX(0); } }';
+          document.head.appendChild(style);
+        }
+      }
+      
+      const syncLeaveText = document.getElementById('syncLeaveText');
+      syncLeaveText.textContent = '正在同步请假状态...';
+      
+      try {
+        const res = await fetch('/api/leave/sync', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ appKey: appKey, appSecret: appSecret, days: 30 })
+        });
+        const result = await res.json();
+        
+        if (result.success) {
+          syncLeaveText.textContent = '✓ ' + result.message;
+          document.getElementById('syncLeaveToast').style.background = 'linear-gradient(135deg, #f6ffed, #d9f7be)';
+          // 同步成功后刷新数据并重置倒计时
+          setTimeout(() => { const t = document.getElementById('syncLeaveToast'); if(t) t.remove(); }, 3000);
+          await loadPersons();
+          lastSyncTime = Date.now(); // 重置倒计时
+        } else {
+          syncLeaveText.textContent = '✕ ' + result.message;
+          document.getElementById('syncLeaveToast').style.background = 'linear-gradient(135deg, #fff1f0, #ffccc7)';
+          setTimeout(() => { const t = document.getElementById('syncLeaveToast'); if(t) t.remove(); }, 5000);
+          // 如果有错误，显示详细错误信息
+          if (result.errors && result.errors.length > 0) {
+            console.log('[Leave Sync] Errors:', result.errors);
+          }
+        }
+      } catch (e) {
+        syncLeaveText.textContent = '✕ 同步失败: ' + e.message;
+        document.getElementById('syncLeaveToast').style.background = 'linear-gradient(135deg, #fff1f0, #ffccc7)';
+        setTimeout(() => { const t = document.getElementById('syncLeaveToast'); if(t) t.remove(); }, 5000);
+      }
+    }
+    
+    // 测试同步：将间隔设为10秒并立即执行一次同步
+    let testSyncMode = localStorage.getItem('leaveSyncTestMode') === 'true';
+    let originalIntervalSeconds = 4 * 3600;
+    
+    async function testSyncNow() {
+      if (testSyncMode) {
+        // 恢复原始设置
+        testSyncMode = false;
+        localStorage.setItem('leaveSyncTestMode', 'false');
+        // 恢复原始间隔
+        syncIntervalSeconds = originalIntervalSeconds || (4 * 3600);
+        syncIntervalHours = syncIntervalSeconds / 3600;
+        document.getElementById('syncSubtitle').textContent = '每' + syncIntervalHours + '小时自动同步一次';
+        document.getElementById('syncSubtitle').style.color = '#666';
+        document.getElementById('syncIcon').textContent = '🔄';
+        
+        // 显示恢复提示
+        const toast = document.createElement('div');
+        toast.style.cssText = 'position:fixed;top:80px;right:24px;background:linear-gradient(135deg, #fff7e6, #ffd591);padding:16px 24px;border-radius:10px;box-shadow:0 4px 20px rgba(0,0,0,0.15);z-index:2000;display:flex;align-items:center;gap:10px;animation:slideIn 0.3s ease';
+        toast.innerHTML = '<span style="font-size:18px">✅</span><span>已恢复正常同步间隔（' + syncIntervalHours + '小时）</span>';
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+        return;
+      }
+      
+      // 启用测试模式 - 保存当前间隔
+      testSyncMode = true;
+      localStorage.setItem('leaveSyncTestMode', 'true');
+      originalIntervalSeconds = syncIntervalSeconds;
+      syncIntervalSeconds = 10; // 10秒
+      syncIntervalHours = 10 / 3600;
+      document.getElementById('syncSubtitle').textContent = '⚡ 测试模式：10秒后自动同步';
+      document.getElementById('syncSubtitle').style.color = '#fa8c16';
+      document.getElementById('syncIcon').textContent = '⚡';
+      
+      // 显示测试模式提示
+      const toast = document.createElement('div');
+      toast.style.cssText = 'position:fixed;top:80px;right:24px;background:linear-gradient(135deg, #fffbe6, #ffe58f);padding:16px 24px;border-radius:10px;box-shadow:0 4px 20px rgba(0,0,0,0.15);z-index:2000;display:flex;align-items:center;gap:10px;animation:slideIn 0.3s ease';
+      toast.innerHTML = '<span style="font-size:18px">⚡</span><span>测试模式已启用！每10秒自动同步一次。再次点击"测试10秒"可退出。</span>';
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 5000);
+      
+      // 立即执行一次同步
+      await syncLeaveNow();
+    }
+
+    async function clearLeaveStatus() {
+      if (!confirm('确定要清空所有人员的请假状态吗？')) return;
+      try {
+        const res = await fetch('/api/leave/clear', {method: 'POST'});
+        const result = await res.json();
+        if (result.success) {
+          alert('已清空所有请假状态');
+          loadPersons();
+        } else {
+          alert('清空失败: ' + result.message);
+        }
+      } catch (e) {
+        alert('请求失败: ' + e.message);
+      }
+    }
+
+    async function loadLeaveSchedule() {
+      try {
+        const res = await fetch('/api/leave/schedule');
+        const config = await res.json();
+        document.getElementById('leaveSyncEnabled').checked = config.enabled !== false;
+        document.getElementById('leaveSyncInterval').value = config.intervalHours || 4;
+      } catch (e) {}
+    }
+
+    async function saveLeaveSchedule() {
+      const enabled = document.getElementById('leaveSyncEnabled').checked;
+      const interval = parseInt(document.getElementById('leaveSyncInterval').value) || 4;
+      try {
+        await fetch('/api/leave/schedule', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ enabled: enabled, intervalHours: interval })
+        });
+      } catch (e) {}
+    }
+
+    // 测试请假功能
+    function showLeaveTestModal() {
+      const select = document.getElementById('leaveTestPerson');
+      select.innerHTML = '<option value="">-- 请选择人员 --</option>';
+      persons.forEach(p => {
+        select.innerHTML += `<option value="${p.id}">${p.name} (${p.department || '无部门'})</option>`;
+      });
+      
+      const today = new Date().toISOString().split('T')[0];
+      document.getElementById('leaveTestStart').value = today;
+      document.getElementById('leaveTestEnd').value = today;
+      document.getElementById('leaveTestPersonInfo').textContent = '';
+      
+      document.getElementById('leaveTestModal').style.display = 'flex';
+    }
+
+    function updateLeaveTestPersonInfo() {
+      const personId = document.getElementById('leaveTestPerson').value;
+      const info = document.getElementById('leaveTestPersonInfo');
+      if (!personId) { info.textContent = ''; return; }
+      const person = persons.find(p => p.id === personId);
+      if (person) {
+        info.textContent = person.leave_status 
+          ? `当前状态: ${person.leave_status} (${person.leave_start || ''} ~ ${person.leave_end || ''})` 
+          : '当前状态: 无请假';
+      }
+    }
+
+    async function saveTestLeave() {
+      const personId = document.getElementById('leaveTestPerson').value;
+      const leaveType = document.getElementById('leaveTestType').value;
+      const startDate = document.getElementById('leaveTestStart').value;
+      const endDate = document.getElementById('leaveTestEnd').value;
+      
+      if (!personId) { alert('请选择人员'); return; }
+      if (!startDate || !endDate) { alert('请选择请假日期'); return; }
+      
+      try {
+        const res = await fetch('/api/leave/set', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            personId: personId,
+            leaveStatus: leaveType,
+            leaveStart: startDate,
+            leaveEnd: endDate,
+            leaveType: leaveType
+          })
+        });
+        const result = await res.json();
+        
+        if (result.success) {
+          alert('请假设置成功！');
+          hideModal('leaveTestModal');
+          loadPersons();
+        } else {
+          alert('设置失败: ' + result.message);
+        }
+      } catch (e) {
+        alert('请求失败: ' + e.message);
+      }
+    }
+
+    async function clearPersonLeave() {
+      const personId = document.getElementById('leaveTestPerson').value;
+      if (!personId) { alert('请先选择人员'); return; }
+      if (!confirm('确定要清空此人员的请假状态吗？')) return;
+      
+      try {
+        const res = await fetch('/api/leave/set', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            personId: personId,
+            leaveStatus: '',
+            leaveStart: '',
+            leaveEnd: '',
+            leaveType: ''
+          })
+        });
+        const result = await res.json();
+        if (result.success) {
+          alert('请假状态已清空');
+          hideModal('leaveTestModal');
+          loadPersons();
+        } else {
+          alert('清空失败: ' + result.message);
+        }
+      } catch (e) {
+        alert('请求失败: ' + e.message);
+      }
+    }
+
+    async function exportData() {
+      window.open('/api/export/csv', '_blank');
+    }
+
+    // ========== 同步状态和倒计时 ==========
+    // 从服务器获取所有状态，不再依赖 localStorage
+    let syncIntervalHours = 4;
+    let syncIntervalSeconds = 4 * 3600;
+    let syncEnabled = true;
+    let lastSyncTime = 0;
+    let syncCountdownTimer = null;
+    let syncCountdownPending = false; // 防止倒计时归零时重复调用
+
+    function initSyncStatus() {
+      loadSyncStatus();
+      startSyncCountdown();
+      connectSyncEvents();
+    }
+
+    async function loadSyncStatus() {
+      try {
+        const res = await fetch('/api/leave/schedule');
+        const config = await res.json();
+        // 如果不是测试模式，才从服务器加载配置
+        if (!testSyncMode) {
+          syncIntervalHours = config.intervalHours || 4;
+          syncIntervalSeconds = syncIntervalHours * 3600;
+        }
+        syncEnabled = config.enabled !== false;
+        
+        // 从服务器获取上次同步时间
+        if (config.lastSyncTime && config.lastSyncTime > 0) {
+          lastSyncTime = config.lastSyncTime;
+        }
+        
+        // 如果是测试模式，应用测试样式
+        if (testSyncMode) {
+          document.getElementById('syncSubtitle').textContent = '⚡ 测试模式：10秒后自动同步';
+          document.getElementById('syncSubtitle').style.color = '#fa8c16';
+          document.getElementById('syncIcon').textContent = '⚡';
+        }
+        
+        const syncBar = document.getElementById('syncStatusBar');
+        if (syncEnabled) {
+          syncBar.style.display = 'block';
+          document.getElementById('syncIcon').textContent = '🔄';
+          document.getElementById('syncTitle').textContent = '请假自动同步';
+          document.getElementById('syncSubtitle').textContent = `每${syncIntervalHours}小时自动同步一次`;
+        } else {
+          syncBar.style.display = 'block';
+          document.getElementById('syncIcon').textContent = '⏸️';
+          document.getElementById('syncTitle').textContent = '请假同步已暂停';
+          document.getElementById('syncSubtitle').textContent = '可在系统配置中重新开启';
+          document.getElementById('syncCountdown').textContent = '--';
+          document.getElementById('syncCountdown').style.color = '#999';
+          if (syncCountdownTimer) clearInterval(syncCountdownTimer);
+        }
+      } catch (e) {
+        console.log('获取同步状态失败:', e);
+      }
+    }
+
+    function startSyncCountdown() {
+      if (syncCountdownTimer) clearInterval(syncCountdownTimer);
+      
+      syncCountdownTimer = setInterval(() => {
+        if (!syncEnabled) return;
+        
+        const elapsed = Math.floor((Date.now() - lastSyncTime) / 1000); // 转为秒
+        const totalSeconds = syncIntervalSeconds;
+        const remaining = Math.max(0, totalSeconds - elapsed);
+        
+        const hours = Math.floor(remaining / 3600);
+        const minutes = Math.floor((remaining % 3600) / 60);
+        const seconds = remaining % 60;
+        
+        let countdownText = '';
+        if (hours > 0) {
+          countdownText = `${hours}小时${minutes}分`;
+        } else if (minutes > 0) {
+          countdownText = `${minutes}分${seconds}秒`;
+        } else {
+          countdownText = `${seconds}秒`;
+        }
+        
+        const countdownEl = document.getElementById('syncCountdown');
+        countdownEl.textContent = countdownText;
+        
+        // 如果剩余时间小于1分钟或测试模式，显示警告
+        if (remaining < 60 && remaining > 0) {
+          countdownEl.style.color = '#ff4d4f';
+        } else if (testSyncMode) {
+          countdownEl.style.color = '#fa8c16';
+        } else {
+          countdownEl.style.color = '#667eea';
+        }
+        
+        // 倒计时归零后，延迟刷新一次状态（避免每秒重复请求）
+        if (remaining === 0) {
+          if (testSyncMode) {
+            if (!syncCountdownPending) {
+              syncCountdownPending = true;
+              syncLeaveNow().then(() => {
+                testSyncMode = false;
+                localStorage.setItem('leaveSyncTestMode', 'false');
+                loadSyncStatus();
+                syncCountdownPending = false;
+                
+                const toast = document.createElement('div');
+                toast.style.cssText = 'position:fixed;top:80px;right:24px;background:linear-gradient(135deg, #f6ffed, #d9f7be);padding:16px 24px;border-radius:10px;box-shadow:0 4px 20px rgba(0,0,0,0.15);z-index:2000;display:flex;align-items:center;gap:10px;animation:slideIn 0.3s ease';
+                toast.innerHTML = '<span style="font-size:18px">✅</span><span>测试完成，已恢复正常同步间隔</span>';
+                document.body.appendChild(toast);
+                setTimeout(() => toast.remove(), 3000);
+              });
+            }
+          } else if (!syncCountdownPending) {
+            // 服务器端定时线程会自动执行同步并更新 lastSyncTime
+            // 延迟30秒后再查询，给服务器同步线程执行时间
+            syncCountdownPending = true;
+            setTimeout(() => {
+              loadSyncStatus();
+              syncCountdownPending = false;
+            }, 30000);
+          }
+        }
+      }, 1000);
+    }
+
+    // 监听服务器同步事件来刷新倒计时（复用已有的EventSource）
+    let adminEventSource = null;
+    let adminSseReconnectDelay = 5000;
+    let adminSseReconnectTimer = null;
+    
+    function disconnectSyncEvents() {
+      if (adminSseReconnectTimer) {
+        clearTimeout(adminSseReconnectTimer);
+        adminSseReconnectTimer = null;
+      }
+      if (adminEventSource) {
+        adminEventSource.close();
+        adminEventSource = null;
+      }
+    }
+    
+    function connectSyncEvents() {
+      disconnectSyncEvents();
+      adminEventSource = new EventSource('/api/events');
+      adminEventSource.addEventListener('persons_changed', () => {
+        loadSyncStatus();
+        loadPersons();
+      });
+      adminEventSource.onerror = () => {
+        console.log('[SSE] Connection error, reconnect in', adminSseReconnectDelay/1000, 's');
+        disconnectSyncEvents();
+        adminSseReconnectTimer = setTimeout(connectSyncEvents, adminSseReconnectDelay);
+        adminSseReconnectDelay = Math.min(adminSseReconnectDelay * 2, 60000);
+      };
+      adminEventSource.onopen = () => {
+        adminSseReconnectDelay = 5000;
+      };
+    }
+
+    // 重写 syncLeaveNow 函数，在同步成功后从服务器刷新倒计时
+    const originalSyncLeaveNow = syncLeaveNow;
+    syncLeaveNow = async function() {
+      await originalSyncLeaveNow();
+      loadSyncStatus();
+    };
+
+    // 页面卸载时清理所有资源，防止切换页面时连接/定时器累积
+    function cleanup() {
+      disconnectSyncEvents();
+      if (syncCountdownTimer) {
+        clearInterval(syncCountdownTimer);
+        syncCountdownTimer = null;
+      }
+      sseLoadPending = false;
+    }
+
+    // 防止页面从缓存恢复时重复执行 onload
+    if (window._adminInitialized) {
+      cleanup();
+    }
+    window._adminInitialized = true;
+
+    window.onload = () => {
+      loadProjects();
+      loadPersons();
+      initSyncStatus();
+      connectSyncEvents();
+    };
+    
+    window.addEventListener('beforeunload', cleanup);
+    window.addEventListener('unload', cleanup);
+  </script>
+</body>
+</html>
