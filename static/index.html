@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Claw 项目排期看板</title>
+  <title id="pageTitle">Claw 项目排期看板</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
@@ -53,7 +53,7 @@
       <div class="status-icon">✅</div>
       <h2>服务已启动</h2>
     </div>
-    <h1>Claw 项目排期看板</h1>
+    <h1 id="mainTitle">Claw 项目排期看板</h1>
     <p>Python 虚拟环境已配置完成<br>Flask 后端服务运行中</p>
 
     <div class="menu-grid">
@@ -74,5 +74,16 @@
       </a>
     </div>
   </div>
+  <script>
+    // 加载项目标题
+    fetch('/api/config')
+      .then(r => r.json())
+      .then(config => {
+        const title = config.project_title || 'Claw 项目排期看板';
+        document.title = title;
+        document.getElementById('mainTitle').textContent = title;
+      })
+      .catch(() => {});
+  </script>
 </body>
 </html>

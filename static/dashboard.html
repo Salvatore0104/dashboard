@@ -258,6 +258,7 @@
       leave_color: '#333333',
       business_trip_color: '#00b8d9'
     };
+    let projectTitle = 'Claw 项目排期看板';
 
     async function loadData() {
       try {
@@ -271,7 +272,8 @@
         persons = ps;
         assignments = as_;
         defaultAssignDays = parseInt(cfg.default_assign_days) || 1;
-        
+        projectTitle = cfg.project_title || 'Claw 项目排期看板';
+
         colorConfig = {
           pre_person_color: cfg.pre_person_color || '#1890ff',
           post_person_color: cfg.post_person_color || '#52c41a',
@@ -280,7 +282,15 @@
           leave_color: cfg.leave_color || '#333333',
           business_trip_color: cfg.business_trip_color || '#00b8d9'
         };
-        
+
+        // 更新页面标题
+        document.title = projectTitle;
+        const titleElements = document.querySelectorAll('.navbar h1');
+        titleElements.forEach(el => {
+          const textSpan = el.querySelector('.title-text');
+          if (textSpan) textSpan.textContent = projectTitle;
+        });
+
         render();
       } catch (e) {
         console.warn('[loadData] 加载失败，10秒后重试:', e.message);

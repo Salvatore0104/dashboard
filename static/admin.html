@@ -340,6 +340,7 @@
         <!-- 看板配置 -->
         <div style="margin-bottom:20px;padding-bottom:20px;border-bottom:1px solid #f0f0f0">
           <div style="font-weight:600;margin-bottom:14px;color:#333;font-size:15px">看板配置</div>
+          <div class="form-group"><label class="form-label">项目标题（显示在页面顶部的名称）</label><input type="text" class="form-input" id="projectTitle" placeholder="如：Claw 项目排期看板" style="max-width:300px"></div>
           <div class="form-group"><label class="form-label">默认分配天数（拖拽人员时默认创建的天数）</label><input type="number" class="form-input" id="defaultAssignDays" value="1" min="1" max="30" style="width:120px"></div>
         </div>
         
@@ -1134,6 +1135,7 @@
       try {
         const res = await fetch('/api/config');
         const config = await res.json();
+        document.getElementById('projectTitle').value = config.project_title || 'Claw 项目排期看板';
         document.getElementById('dingAppKey').value = config.ding_appKey || '';
         document.getElementById('dingAppSecret').value = config.ding_appSecret || '';
         document.getElementById('defaultAssignDays').value = config.default_assign_days || '1';
@@ -1144,7 +1146,7 @@
         document.getElementById('leaveColorText').value = config.leave_color || '#333333';
         document.getElementById('businessTripColor').value = config.business_trip_color || '#00b8d9';
         document.getElementById('businessTripColorText').value = config.business_trip_color || '#00b8d9';
-        
+
         // 加载部门颜色配置
         const deptColors = config.dept_colors ? JSON.parse(config.dept_colors) : {};
         deptConfig.forEach(d => {
@@ -1217,11 +1219,12 @@
           deptColors[d.name] = input.value;
         }
       });
-      
+
       await fetch('/api/config', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
+          project_title: document.getElementById('projectTitle').value,
           ding_appKey: document.getElementById('dingAppKey').value,
           ding_appSecret: document.getElementById('dingAppSecret').value,
           default_assign_days: document.getElementById('defaultAssignDays').value,
@@ -1825,6 +1828,16 @@
       loadPersons();
       initSyncStatus();
       connectSyncEvents();
+      // 加载项目标题
+      fetch('/api/config')
+        .then(r => r.json())
+        .then(config => {
+          const title = (config.project_title || 'Claw 项目排期看板') + ' - 管理后台';
+          document.title = title;
+          const navbarTitle = document.getElementById('navbarTitle');
+          if (navbarTitle) navbarTitle.textContent = title;
+        })
+        .catch(() => {});
     };
     
     window.addEventListener('beforeunload', cleanup);

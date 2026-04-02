@@ -390,6 +390,7 @@ def save_config():
         conn.execute('INSERT OR REPLACE INTO config (key, value) VALUES (?,?)', (key, str(value)))
     conn.commit()
     conn.close()
+    broadcast('config_changed', {'action': 'update'})
     return jsonify({'success': True})
 
 # ==================== 钉钉 API ====================
@@ -804,16 +805,18 @@ def export_persons_csv():
         conn = get_db()
         persons = conn.execute('SELECT * FROM persons ORDER BY group_type, name').fetchall()
         conn.close()
-        
+
         import csv
         import io
-        
+
         output = io.StringIO()
+        # 添加UTF-8 BOM，解决Excel打开中文乱码问题
+        output.write('\ufeff')
         writer = csv.writer(output)
-        
+
         # 写入表头
         writer.writerow(['ID', '姓名', '部门', '钉钉ID', '分组', '头像', '请假状态', '请假开始', '请假结束', '请假类型'])
-        
+
         # 写入数据
         for p in persons:
             writer.writerow([
@@ -828,11 +831,11 @@ def export_persons_csv():
                 p['leave_end'],
                 p['leave_type']
             ])
-        
+
         output.seek(0)
         return Response(
             output.getvalue(),
-            mimetype='text/csv',
+            mimetype='text/csv; charset=utf-8',
             headers={'Content-Disposition': 'attachment; filename=persons.csv'}
         )
     except Exception as e:
