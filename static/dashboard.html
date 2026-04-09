@@ -61,10 +61,10 @@
       flex-shrink: 0;
     }
     .gantt-left-header { height: 60px; display: flex; align-items: center; padding: 0 16px; font-weight: 600; background: linear-gradient(180deg, #f8f9ff, #f0f5ff); border-bottom: 2px solid #e8e8e8; color: #555; font-size: 14px; }
-    .gantt-row-label { height: 42px; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid #f0f0f0; font-size: 13px; transition: background 0.2s; background: inherit; }
+    .gantt-row-label { height: 42px; max-height: 42px; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid #f0f0f0; font-size: 13px; transition: background 0.2s, opacity 0.2s ease-out, max-height 0.3s ease-out; background: inherit; }
     .gantt-row-label:hover { background: rgba(102,126,234,0.05); }
     .gantt-row-label.project { background: linear-gradient(90deg, rgba(102,126,234,0.08), transparent); font-weight: 600; color: #333; }
-    .gantt-row-label.person { background: #fff; padding-left: 32px; color: #555; }
+    .gantt-row-label.person { background: #fff; padding-left: 32px; color: #555; transition: all 0.3s; }
     .row-dot { width: 10px; height: 10px; border-radius: 3px; margin-right: 10px; flex-shrink: 0; }
     
     /* 右侧区域 */
@@ -97,7 +97,7 @@
     .bg-col { border-right: 1px solid #f5f5f5; flex-shrink: 0; }
     .bg-col.weekend { background: rgba(255, 77, 79, 0.04); }
     .bg-col.today { background: rgba(102, 126, 234, 0.06); }
-    .gantt-row { height: 42px; border-bottom: 1px solid #f0f0f0; position: relative; }
+    .gantt-row { height: 42px; max-height: 42px; border-bottom: 1px solid #f0f0f0; position: relative; transition: opacity 0.2s ease-out, max-height 0.3s ease-out; }
     
     /* 条形 */
     .bar { position: absolute; height: 30px; top: 6px; border-radius: 6px; display: flex; align-items: center; padding: 0 14px 0 10px; color: white; font-size: 12px; font-weight: 500; user-select: none; transition: transform 0.15s, box-shadow 0.15s; box-shadow: 0 2px 8px rgba(0,0,0,0.15); cursor: grab; }
@@ -105,7 +105,9 @@
     .bar.person-bar { cursor: grab; }
     .bar:hover:not(.dragging) { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,0.22); }
     .bar:active:not(.dragging) { cursor: grabbing; transform: translateY(0); }
-    .bar.dragging { opacity: 0.9; z-index: 100; cursor: grabbing !important; transform: scale(1.03); box-shadow: 0 8px 24px rgba(0,0,0,0.3) !important; }
+    .bar.dragging { opacity: 0.9; z-index: 100; cursor: grabbing !important; transform: scale(1.03); box-shadow: 0 8px 24px rgba(0,0,0,0.3) !important; transition: none !important; }
+    .bar.drag-transition { transition: left 220ms cubic-bezier(0.22, 1, 0.36, 1), width 220ms cubic-bezier(0.22, 1, 0.36, 1); }
+    .bar.bar-selected { border: 3px solid #1890ff; box-shadow: 0 0 8px rgba(24, 144, 255, 0.5); }
     .bar-resize { position: absolute; top: 0; bottom: 0; width: 14px; cursor: ew-resize; border-radius: 6px; transition: background 0.15s; }
     .bar-resize.left { left: 0; }
     .bar-resize.right { right: 0; }
@@ -119,6 +121,13 @@
     .bar.person-bar.person-highlight {
       box-shadow: 0 0 0 3px rgba(255, 215, 0, 0.9), 0 4px 14px rgba(0,0,0,0.25) !important;
       transform: scale(1.05);
+      z-index: 60;
+    }
+
+    /* 多选时人员条高亮 */
+    .bar.person-bar.selected {
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.9), 0 4px 14px rgba(0,0,0,0.25) !important;
+      transform: scale(1.08);
       z-index: 60;
     }
 
@@ -153,26 +162,30 @@
     .person-row-placeholder::after { bottom: -4px; }
     
     /* 人员池 */
-    .person-pool { background: white; border-radius: 14px; padding: 20px; margin-top: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+    .person-pool { background: white; border-radius: 14px; padding: 12px 16px; margin-bottom: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
     .person-pool-title { font-weight: 600; color: #333; font-size: 15px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
     .person-pool-title .icon { font-size: 18px; }
     .person-chips { display: flex; flex-wrap: wrap; gap: 10px; }
-    .person-chip { display: inline-flex; align-items: center; padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: 500; cursor: grab; transition: all 0.3s; border: 2px solid transparent; }
+    .person-chip { display: inline-flex; align-items: center; padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: 500; transition: all 0.3s; border: 2px solid transparent; }
     .person-chip:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
     .person-chip.leave { background: linear-gradient(135deg, #333, #555) !important; color: white !important; border-color: #333; cursor: not-allowed !important; opacity: 0.7; }
     .person-chip.leave:hover { transform: none !important; box-shadow: none !important; }
     .person-chip.dragging { opacity: 0.5; transform: scale(0.95); }
+    .person-chip.focused { transform: scale(1.02); box-shadow: 0 10px 24px rgba(102,126,234,0.22); z-index: 2; }
+    .person-chip.collapsed { opacity: 0; transform: translateY(4px) scale(0.94); pointer-events: none; max-width: 0; min-width: 0; padding: 0 8px; margin: 0; border-color: transparent; }
     
     /* 部门分组 */
-    .dept-group { margin-bottom: 16px; }
-    .dept-header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: linear-gradient(135deg, #f8f9ff, #f0f5ff); border-radius: 10px; margin-bottom: 10px; cursor: pointer; transition: all 0.2s; }
+    .dept-group { margin-bottom: 12px; }
+    .dept-header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: linear-gradient(135deg, #f8f9ff, #f0f5ff); border-radius: 8px; margin-bottom: 6px; transition: all 0.2s; }
     .dept-header:hover { background: linear-gradient(135deg, #eef1ff, #e6edff); }
-    .dept-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; }
-    .dept-name { font-weight: 600; color: #333; flex: 1; }
-    .dept-count { background: rgba(255,255,255,0.8); color: #667eea; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
-    .dept-toggle { color: #999; transition: transform 0.3s; }
+    .dept-icon { width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 12px; }
+    .dept-name { font-weight: 600; color: #333; font-size: 14px; }
+    .dept-count { background: rgba(255,255,255,0.8); color: #667eea; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+    .dept-toggle { color: #999; transition: transform 0.3s; font-size: 12px; }
     .dept-toggle.collapsed { transform: rotate(-90deg); }
     .dept-content { padding-left: 16px; }
+    .dept-content.collapsed { display: none; }
+    .person-chips { display: flex; flex-wrap: wrap; gap: 6px; }
     .dept-content.collapsed { display: none; }
     
     /* 空状态 */
@@ -194,7 +207,7 @@
 <body>
   <nav class="navbar">
     <h1>
-      <span class="logo">C</span>
+      <span class="logo">📋</span>
       <span id="navTitle">Claw 项目排期看板</span>
     </h1>
     <ul class="nav-menu">
@@ -211,6 +224,8 @@
         <span class="tag tag-gradient" id="todayTag"></span>
       </h2>
       <div style="display:flex;gap:10px;align-items:center">
+        <!-- 删除模式开关 -->
+        <button id="deleteModeBtn" style="padding:6px 12px;background:#fff7e6;color:#d46b08;border:1px solid #ffb940;border-radius:4px;cursor:pointer;font-size:12px;transition:0.2s" onclick="toggleDeleteMode()">🗑️ 删除模式</button>
         <!-- 同步状态显示 -->
         <div id="syncStatusBar" style="display:none;align-items:center;gap:6px;padding:6px 12px;background:#f0f5ff;border-radius:20px;font-size:12px;color:#667eea">
           <span id="syncIcon">🔄</span>
@@ -227,16 +242,16 @@
       </div>
     </div>
 
-    <div class="gantt-wrapper" id="ganttWrapper">
-      <div class="gantt" id="gantt"></div>
-    </div>
-
     <div class="person-pool" id="personPool">
       <div class="person-pool-title">
         <span class="icon">👥</span>
         人员列表（拖拽到项目上分配，默认1天）
       </div>
       <div id="personChips"></div>
+    </div>
+
+    <div class="gantt-wrapper" id="ganttWrapper">
+      <div class="gantt" id="gantt"></div>
     </div>
   </div>
 
@@ -274,6 +289,91 @@
       business_trip_color: '#00b8d9'
     };
     let projectTitle = 'Claw 项目排期看板';
+    let selectedPersonIds = [];
+    let selectedBars = new Set(); // 多选person-bar集合（全局）
+    let deleteMode = false; // 删除模式开关
+
+    function togglePersonSelect(personId, event) {
+      event.stopPropagation();
+      if (selectedPersonIds.includes(personId)) {
+        selectedPersonIds = selectedPersonIds.filter(id => id !== personId);
+      } else {
+        selectedPersonIds.push(personId);
+      }
+      updatePersonSelection();
+    }
+
+    function updatePersonSelection() {
+      document.querySelectorAll('.bar.person-bar').forEach(bar => {
+        if (selectedPersonIds.includes(bar.dataset.person)) {
+          bar.classList.add('selected');
+        } else {
+          bar.classList.remove('selected');
+        }
+      });
+      
+      document.querySelectorAll('.person-chip').forEach(chip => {
+        if (selectedPersonIds.includes(chip.dataset.person)) {
+          chip.style.boxShadow = '0 0 0 2px rgba(102, 126, 234, 0.9), 0 4px 12px rgba(102,126,234,0.3)';
+          chip.style.borderColor = '#667eea';
+        } else {
+          chip.style.boxShadow = '';
+          chip.style.borderColor = 'transparent';
+        }
+      });
+      
+      // 更新甘特图显示：折叠非选中人员
+      updateGanttDisplay();
+    }
+
+    function updateGanttDisplay() {
+      const wrapper = document.getElementById('ganttWrapper');
+      const currentHeight = wrapper.offsetHeight;
+      wrapper.style.minHeight = currentHeight + 'px';
+      
+      if (selectedPersonIds.length > 0) {
+        // 只显示选中的人员行
+        document.querySelectorAll('.gantt-row-label.person').forEach(label => {
+          if (selectedPersonIds.includes(label.dataset.personRow)) {
+            label.style.opacity = '1';
+            label.style.maxHeight = '42px';
+            label.style.display = 'flex';
+          } else {
+            label.style.opacity = '0';
+            label.style.maxHeight = '0';
+            label.style.display = 'none';
+          }
+        });
+        document.querySelectorAll('.gantt-row-person').forEach(row => {
+          if (selectedPersonIds.includes(row.dataset.personRow)) {
+            row.style.opacity = '1';
+            row.style.maxHeight = '42px';
+            row.style.display = 'block';
+          } else {
+            row.style.opacity = '0';
+            row.style.maxHeight = '0';
+            row.style.display = 'none';
+          }
+        });
+      } else {
+        // 显示所有人员行
+        document.querySelectorAll('.gantt-row-label.person').forEach(label => {
+          label.style.opacity = '1';
+          label.style.maxHeight = '42px';
+          label.style.display = 'flex';
+        });
+        document.querySelectorAll('.gantt-row-person').forEach(row => {
+          row.style.opacity = '1';
+          row.style.maxHeight = '42px';
+          row.style.display = 'block';
+        });
+      }
+    }
+
+    function clearPersonSelection() {
+      selectedPersonIds = [];
+      updatePersonSelection();
+    }
 
     async function loadData() {
       try {
@@ -328,6 +428,13 @@
       const [y, m, d] = s.split('-').map(Number);
       if (isEndDate) return new Date(y, m - 1, d, 23, 59, 59, 999);
       return new Date(y, m - 1, d, 0, 0, 0, 0);
+    }
+
+    function formatDate(date) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      return `${m}-${d}`;
     }
 
     function getLeaveRange(personId) {
@@ -402,6 +509,8 @@
     }
 
     function render() {
+      selectedBars.clear(); // 清空之前的多选状态
+      
       const dates = getDates();
       const wrapper = document.getElementById('ganttWrapper');
       colWidth = Math.max(36, Math.floor((wrapper.clientWidth - 220) / displayDays));
@@ -486,13 +595,20 @@
             if (leaveRange) {
               if (leaveRange.isCurrentlyOnLeave) {
                 // 当前在请假周期内：灰色badge
-                leaveBadge = `<span class="tag tag-leave" style="margin-left:6px;padding:2px 6px;font-size:10px;background:#9ca3af">${person.leave_type || '请假'}</span>`;
+                leaveBadge = `<span class="tag tag-leave" style="margin-left:6px;padding:2px 6px;font-size:10px;background:#9ca3af" title="请假中: ${leaveRange.type} (${formatDate(leaveRange.start)}~${formatDate(leaveRange.end)})">${person.leave_type || '请假'}</span>`;
               } else if (leaveRange.isFutureLeave) {
                 // 未来有请假：红点
-                leaveBadge = `<span style="width:8px;height:8px;background:#ef4444;border-radius:50%;display:inline-block;margin-left:6px" title="即将请假: ${person.leave_start}~${person.leave_end}"></span>`;
+                leaveBadge = `<span style="width:8px;height:8px;background:#ef4444;border-radius:50%;display:inline-block;margin-left:6px" title="即将请假: ${leaveRange.type} (${formatDate(leaveRange.start)}~${formatDate(leaveRange.end)})"></span>`;
               }
             }
-            leftHtml += `<div class="gantt-row-label person" data-person-row="${personId}" data-project-row="${p.id}">${person.name}${leaveBadge}</div>`;
+            const groupType = person.group_type || '';
+            const dept = person.department || '';
+            // 判断是否是前期或后期
+            const isPre = groupType === 'pre' || dept.includes('前期') || dept.includes('美术');
+            const isPost = groupType === 'post' || dept.includes('后期') || dept.includes('制作') || dept.includes('VJ');
+            const groupIcon = isPre ? '🎨 ' : (isPost ? '🎬 ' : '');
+            const deleteIcon = deleteMode ? `<span style="margin-left:8px;cursor:pointer;color:#ff4d4f;font-size:14px" onclick="deletePersonRow('${personId}', '${p.id}'); return false;" title="删除此人员">🗑️</span>` : '';
+            leftHtml += `<div class="gantt-row-label person" data-person-row="${personId}" data-project-row="${p.id}"><span style="margin-right:4px">${groupIcon}</span>${person.name}${leaveBadge}${deleteIcon}</div>`;
           }
         });
       });
@@ -688,7 +804,7 @@
                 extraStyle = `background: ${personColor};`;
               }
               
-              const leaveTip = isInLeave ? ` title="请假中: ${leaveRange.type}"` : '';
+              const leaveTip = isInLeave && leaveRange ? ` title="请假中: ${leaveRange.type} (${formatDate(leaveRange.start)}~${formatDate(leaveRange.end)})"` : '';
               
               // 飞机图标 - 计算出差日期相对于人员分配开始日期的位置
               let personBtIcons = '';
@@ -730,25 +846,38 @@
 
     // 渲染人员池 - 按部门分组
     function renderPersonPool() {
-      // 按部门分组
-      const deptGroups = {};
-      deptConfig.forEach(d => deptGroups[d.name] = []);
-      
-      persons.forEach(p => {
-        const dept = getPersonDept(p);
-        deptGroups[dept].push(p);
-      });
+      try {
+        // 按部门分组
+        const deptGroups = {};
+        deptConfig.forEach(d => deptGroups[d.name] = []);
+        
+        persons.forEach(p => {
+          const dept = getPersonDept(p);
+          deptGroups[dept].push(p);
+        });
 
-      let html = '';
+        console.log('renderPersonPool debug:');
+        console.log('Total persons:', persons.length);
+        console.log('Dept groups:', deptGroups);
+        
+        let html = '';
       for (const dept of deptConfig) {
         const groupPersons = deptGroups[dept.name];
-        if (groupPersons.length === 0 && dept.name !== '其他') continue;
+        if (groupPersons.length === 0) continue;
         
         const isOther = dept.name === '其他';
+        // 根据部门名称判断群组类型图标
+        let deptIcon = '';
+        if (dept.name.includes('前期') || dept.name.includes('美术')) {
+          deptIcon = '🎨';
+        } else if (dept.name.includes('后期') || dept.name.includes('制作')) {
+          deptIcon = '🎬';
+        }
+        
         html += `<div class="dept-group">`;
         html += `
           <div class="dept-header" onclick="toggleDeptPool('${dept.name}')">
-            <div class="dept-icon" style="background:${dept.color}">${dept.name.charAt(0)}</div>
+            <div class="dept-icon" style="background:${dept.color}">${deptIcon || dept.name.charAt(0)}</div>
             <span class="dept-name">${dept.name}</span>
             <span class="dept-count">${groupPersons.length}人</span>
             <span class="dept-toggle" id="pool_toggle_${dept.name}">▼</span>
@@ -775,26 +904,37 @@
               chipClass = 'leave';
               chipStyle = 'background:#9ca3af;color:white;opacity:0.8';
               chipIcon = ' ❌';
-              leaveTip = ` title="请假中: ${p.leave_type || p.leave_status || '请假'} (${p.leave_start}~${p.leave_end})"`;
+              leaveTip = ` title="请假中: ${leaveRange.type} (${formatDate(leaveRange.start)}~${formatDate(leaveRange.end)})"`;
             } else if (isFutureLeave) {
               // 未来有请假：红点标记
               chipStyle = 'background:' + dept.color + ';color:white';
               chipIcon = ' <span style="width:8px;height:8px;background:#ef4444;border-radius:50%;display:inline-block;margin-left:2px"></span>';
-              leaveTip = ` title="即将请假: ${p.leave_type || p.leave_status || '请假'} (${p.leave_start}~${p.leave_end})"`;
+              leaveTip = ` title="即将请假: ${leaveRange.type} (${formatDate(leaveRange.start)}~${formatDate(leaveRange.end)})"`;
             } else {
               // 无请假或请假已结束
               chipStyle = 'background:' + dept.color + ';color:white';
               chipIcon = '';
             }
+            
+            const groupType = p.group_type || '';
+            const personDept = p.department || '';
+            const isPre = groupType === 'pre' || personDept.includes('前期') || personDept.includes('美术');
+            const isPost = groupType === 'post' || personDept.includes('后期') || personDept.includes('制作') || personDept.includes('VJ');
+            const groupIcon = isPre ? '🎨' : (isPost ? '🎬' : '');
 
-            html += `<div class="person-chip ${chipClass}" style="${chipStyle}" ${leaveTip} draggable="true" data-person="${p.id}" data-is-leave="${isCurrentlyOnLeave}" onmouseenter="highlightPersonBars('${p.id}')" onmouseleave="clearAllHighlights()">${p.name}${chipIcon}</div>`;
+            html += `<div class="person-chip ${chipClass}" style="${chipStyle}" ${leaveTip} data-person="${p.id}" data-is-leave="${isCurrentlyOnLeave}" onclick="togglePersonSelect('${p.id}', event); return false;" draggable="true">${p.name}${chipIcon}</div>`;
           });
         }
         
         html += `</div></div></div>`;
       }
 
+      console.log('Final HTML length:', html.length);
       document.getElementById('personChips').innerHTML = html || '<div style="color:#999;font-size:14px;text-align:center;padding:30px">暂无人员</div>';
+      } catch (err) {
+        console.error('renderPersonPool error:', err);
+        document.getElementById('personChips').innerHTML = `<div style="color:red;padding:20px">人员列表加载出错: ${err.message}</div>`;
+      }
     }
 
     function toggleDeptPool(deptName) {
@@ -1024,22 +1164,190 @@
       highlightedPersonId = null;
     }
 
+    function focusPersonChip(personId) {
+      clearTimeout(restoreTimeout);
+      clearTimeout(focusTimeout);
+      // 防止折叠时页面跳动：固定当前高度
+      const wrapper = document.getElementById('ganttWrapper');
+      const currentHeight = wrapper.offsetHeight;
+      wrapper.style.minHeight = currentHeight + 'px';
+      
+      // ... 其余代码
+      
+      // 检查该人员在当前视图是否有分配条
+      const personBars = document.querySelectorAll(`.bar.person-bar[data-person="${personId}"]`);
+      const hasVisibleBars = personBars.length > 0;
+      
+      if (hasVisibleBars) {
+        // 如果有分配条，高亮该人员的条，折叠其他人员的行和标签
+        personBars.forEach(bar => {
+          bar.classList.add('person-highlight');
+        });
+        document.querySelectorAll('.gantt-row-label.person').forEach(label => {
+          if (label.dataset.personRow === personId) {
+            label.style.opacity = '1';
+            label.style.maxHeight = '42px';
+            label.style.display = 'flex';
+          } else {
+            label.style.opacity = '0';
+            label.style.maxHeight = '0';
+            setTimeout(() => label.style.display = 'none', 300);
+          }
+        });
+        document.querySelectorAll('.gantt-row-person').forEach(row => {
+          if (row.dataset.personRow === personId) {
+            row.style.opacity = '1';
+            row.style.maxHeight = '42px';
+            row.style.display = 'block';
+          } else {
+            row.style.opacity = '0';
+            row.style.maxHeight = '0';
+            setTimeout(() => row.style.display = 'none', 300);
+          }
+        });
+      } else {
+        // 如果没有分配条，折叠所有人员行和标签，只显示项目条
+        document.querySelectorAll('.gantt-row-label.person').forEach(label => {
+          label.style.opacity = '0';
+          label.style.maxHeight = '0';
+          setTimeout(() => label.style.display = 'none', 300);
+        });
+        document.querySelectorAll('.gantt-row-person').forEach(row => {
+          row.style.opacity = '0';
+          row.style.maxHeight = '0';
+          setTimeout(() => row.style.display = 'none', 300);
+        });
+      }
+      
+      // 高亮没有该人员的项目条（红色边缘）
+      projects.forEach(p => {
+        const hasPerson = assignments.some(a => a.project_id === p.id && a.person_id === personId);
+        if (!hasPerson) {
+          const projectBar = document.querySelector(`.bar.project-bar[data-project="${p.id}"]`);
+          if (projectBar) {
+            projectBar.classList.add('project-highlight');
+          }
+        }
+      });
+    }
+
+    function restorePersonPool() {
+      clearAllHighlights();
+      // 显示所有人员标签和行
+      document.querySelectorAll('.gantt-row-label.person').forEach(label => {
+        label.style.display = 'flex';
+        label.style.maxHeight = '42px';
+        label.style.opacity = '1';
+      });
+      document.querySelectorAll('.gantt-row-person').forEach(row => {
+        row.style.display = 'block';
+        row.style.maxHeight = '42px';
+        row.style.opacity = '1';
+      });
+      // 移除高度固定，允许高度恢复
+      setTimeout(() => {
+        const wrapper = document.getElementById('ganttWrapper');
+        wrapper.style.minHeight = '';
+      }, 350);
+    }
+
+    // 点击空白处清除选中
+    document.addEventListener('click', (e) => {
+      if (!e.target.classList.contains('person-chip')) {
+        clearPersonSelection();
+      }
+    });
+
+    function setupPersonRowHover() {
+      // 已改为多选模式，不再需要悬浮折叠逻辑
+    }
+
+    function toggleDeleteMode() {
+      deleteMode = !deleteMode;
+      const btn = document.getElementById('deleteModeBtn');
+      if (deleteMode) {
+        btn.style.background = '#ffe7e0';
+        btn.style.color = '#d4380d';
+        btn.style.borderColor = '#ff7875';
+        btn.style.fontWeight = 'bold';
+      } else {
+        btn.style.background = '#fff7e6';
+        btn.style.color = '#d46b08';
+        btn.style.borderColor = '#ffb940';
+        btn.style.fontWeight = 'normal';
+      }
+      render();
+    }
+
+    async function deletePersonRow(personId, projectId) {
+      if (!deleteMode) return;
+      
+      const assignmentsList = assignments || [];
+      let assignmentToDelete = assignmentsList.find(a => 
+        (parseInt(a.person_id) === parseInt(personId) && parseInt(a.project_id) === parseInt(projectId)) ||
+        (String(a.person_id).trim() === String(personId).trim() && String(a.project_id).trim() === String(projectId).trim())
+      );
+      
+      if (!assignmentToDelete) return;
+      
+      try {
+        await fetch(`/api/assignments/${assignmentToDelete.id}`, { method: 'DELETE' });
+        await loadData();
+        render();
+      } catch (err) {
+        console.error('Delete failed:', err);
+      }
+    }
+
     function setupDrag() {
+      // selectedBars 已改为全局变量，支持多选
+      
       document.querySelectorAll('.bar.person-bar').forEach(bar => {
+        bar.addEventListener('click', function(e) {
+          if (e.ctrlKey || e.metaKey) {
+            // Ctrl/Cmd+Click to toggle selection
+            if (selectedBars.has(this)) {
+              selectedBars.delete(this);
+              this.classList.remove('bar-selected');
+            } else {
+              selectedBars.add(this);
+              this.classList.add('bar-selected');
+            }
+            e.stopPropagation();
+            e.preventDefault();
+          }
+        });
+        
         bar.addEventListener('dblclick', function(e) {
           const assignmentId = this.dataset.assignment;
           if (assignmentId) deleteAssignment(assignmentId);
         });
         bar.addEventListener('mousedown', function(e) {
-          dragState.resizeDir = e.target.classList.contains('bar-resize') ? e.target.dataset.dir : null;
+          const isResizing = e.target.classList.contains('bar-resize');
+          const barsToMove = selectedBars.has(this) && selectedBars.size > 0 ? Array.from(selectedBars) : [this];
+          
+          dragState.resizeDir = isResizing ? e.target.dataset.dir : null;
           dragState.isDragging = true;
           dragState.bar = this;
+          dragState.bars = barsToMove; // 支持多个bar
           dragState.startX = e.clientX;
           dragState.startLeft = parseInt(this.style.left) || 0;
           dragState.startWidth = parseInt(this.style.width) || 0;
           dragState.currentLeft = dragState.startLeft;
           dragState.currentWidth = dragState.startWidth;
-          this.classList.add('dragging');
+          
+          // 记录所有bar的初始位置
+          dragState.barStates = {};
+          barsToMove.forEach(b => {
+            dragState.barStates[b.dataset.assignment] = {
+              startLeft: parseInt(b.style.left) || 0,
+              startWidth: parseInt(b.style.width) || 0
+            };
+            b.style.transition = 'none';
+            b.style.willChange = 'left, width';
+            b.classList.add('dragging');
+          });
+          
           document.body.style.userSelect = 'none';
 
           e.preventDefault();
@@ -1105,6 +1413,27 @@
 
         dragState.bar.style.left = clamped.left + 'px';
         dragState.bar.style.width = clamped.width + 'px';
+        
+        // 如果有多个bar，同步更新它们
+        if (dragState.bars && dragState.bars.length > 1) {
+          dragState.bars.forEach(bar => {
+            if (bar !== dragState.bar) {
+              const barState = dragState.barStates[bar.dataset.assignment];
+              if (barState) {
+                let barCurrentLeft = barState.startLeft + (dragState.currentLeft - dragState.startLeft);
+                let barCurrentWidth = dragState.resizeDir === 'left' 
+                  ? barState.startWidth - (dragState.currentLeft - dragState.startLeft)
+                  : (dragState.resizeDir === 'right'
+                    ? barState.startWidth + (dragState.currentWidth - dragState.startWidth)
+                    : barState.startWidth);
+                
+                const barClamped = clampToProject(barCurrentLeft, barCurrentWidth, bar.dataset.project);
+                bar.style.left = barClamped.left + 'px';
+                bar.style.width = barClamped.width + 'px';
+              }
+            }
+          });
+        }
 
         dragState.rafId = requestAnimationFrame(updateDragVisual);
       }
@@ -1120,6 +1449,7 @@
         } else if (dragState.resizeDir === 'right') {
           dragState.currentWidth = dragState.startWidth + dx;
         } else {
+          // 移动模式（拖拽整个bar）
           dragState.currentLeft = dragState.startLeft + dx;
         }
 
@@ -1146,15 +1476,19 @@
         const rect = ganttWrapper.getBoundingClientRect();
         const isOutside = e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom;
 
+        // 如果有多个bar，一起处理；否则单个处理
+        const barsToUpdate = dragState.bars && dragState.bars.length > 0 ? dragState.bars : [bar];
+
         if (isOutside && bar.dataset.assignment) {
-          bar.classList.remove('dragging');
+          barsToUpdate.forEach(b => b.classList.remove('dragging'));
           if (confirm('确定删除此分配？')) {
-            await fetch('/api/assignments/' + bar.dataset.assignment, {method: 'DELETE'});
+            await Promise.all(barsToUpdate.map(b => fetch('/api/assignments/' + b.dataset.assignment, {method: 'DELETE'})));
             await loadData();
           } else {
             render();
           }
           dragState.bar = null;
+          dragState.bars = [];
           return;
         }
 
@@ -1166,48 +1500,90 @@
         finalLeft = clamped.left;
         finalWidth = clamped.width;
 
-        // 应用最终位置 - 添加平滑过渡
-        bar.style.transition = 'left 0.15s ease-out, width 0.15s ease-out';
-        bar.style.left = finalLeft + 'px';
-        bar.style.width = finalWidth + 'px';
+        // 应用最终位置 - 添加水滴吸附动画过渡
+        const leftDelta = finalLeft - dragState.startLeft;
+        const widthDelta = finalWidth - dragState.startWidth;
 
-        // 延迟移除dragging类，让过渡生效
-        setTimeout(() => {
-          bar.classList.remove('dragging');
-          bar.style.transition = '';
-        }, 150);
-
-        const left = finalLeft;
-        const width = finalWidth;
-        const startCol = Math.round(left / colWidth);
-        const days = Math.max(1, Math.round((width + 4) / colWidth));
-        const endCol = startCol + days - 1;
-        let newStart = colToDate(startCol);
-        let newEnd = colToDate(endCol);
-        newEnd = new Date(newEnd.getFullYear(), newEnd.getMonth(), newEnd.getDate(), 23, 59, 59, 999);
-
-        if (bar.dataset.assignment) {
-          const projectId = bar.dataset.project;
-          const project = projects.find(p => p.id === projectId);
-          if (project) {
-            const pStart = parseDate(project.start_date);
-            const pEnd = parseDate(project.end_date, true);
-            if (newEnd < pStart || newStart > pEnd) {
-              if (confirm('人员已拖出项目范围，是否删除此分配？')) {
-                await fetch('/api/assignments/' + bar.dataset.assignment, {method: 'DELETE'});
-                await loadData();
-              } else {
-                render();
-              }
-              dragState.bar = null;
-              return;
+        barsToUpdate.forEach(b => {
+          b.style.transition = 'left 300ms ease-out, width 300ms ease-out';
+          b.classList.add('drag-transition');
+          
+          if (b === bar) {
+            b.style.left = finalLeft + 'px';
+            b.style.width = finalWidth + 'px';
+          } else {
+            const barState = dragState.barStates[b.dataset.assignment];
+            if (barState) {
+              let nextLeft = barState.startLeft + leftDelta;
+              let nextWidth = dragState.resizeDir === 'left' 
+                ? barState.startWidth - leftDelta
+                : (dragState.resizeDir === 'right'
+                  ? barState.startWidth + widthDelta
+                  : barState.startWidth);
+              
+              const nextClamped = clampToProject(nextLeft, nextWidth, b.dataset.project);
+              b.style.left = nextClamped.left + 'px';
+              b.style.width = nextClamped.width + 'px';
             }
-            newStart = new Date(Math.max(newStart.getTime(), pStart.getTime()));
-            newEnd = new Date(Math.min(newEnd.getTime(), pEnd.getTime()));
           }
-          await createAssignmentWithMerge(bar.dataset.project, bar.dataset.person, newStart, newEnd, bar.dataset.assignment);
+        });
+
+        // 延迟移除dragging类与过渡样式，让吸附效果自然衔接
+        setTimeout(() => {
+          barsToUpdate.forEach(b => {
+            b.classList.remove('dragging', 'drag-transition');
+            b.style.transition = '';
+            b.style.willChange = '';
+          });
+        }, 300);
+
+        // 更新assignments
+        const updates = [];
+        barsToUpdate.forEach(b => {
+          const bState = dragState.barStates[b.dataset.assignment];
+          if (!bState) return;
+
+          let newLeft = snapToGrid(parseInt(b.style.left) || 0);
+          let newWidth = Math.max(colWidth, snapToGrid(parseInt(b.style.width) || 0));
+          const newClamped = clampToProject(newLeft, newWidth, b.dataset.project);
+          newLeft = newClamped.left;
+          newWidth = newClamped.width;
+
+          const startCol = Math.round(newLeft / colWidth);
+          const days = Math.max(1, Math.round((newWidth + 4) / colWidth));
+          const endCol = startCol + days - 1;
+          let newStart = colToDate(startCol);
+          let newEnd = colToDate(endCol);
+          newEnd = new Date(newEnd.getFullYear(), newEnd.getMonth(), newEnd.getDate(), 23, 59, 59, 999);
+
+          if (b.dataset.assignment) {
+            const projectId = b.dataset.project;
+            const project = projects.find(p => p.id === projectId);
+            if (project) {
+              const pStart = parseDate(project.start_date);
+              const pEnd = parseDate(project.end_date, true);
+              if (newEnd < pStart || newStart > pEnd) {
+                if (confirm('人员已拖出项目范围，是否删除此分配？')) {
+                  updates.push(fetch('/api/assignments/' + b.dataset.assignment, {method: 'DELETE'}));
+                } else {
+                  render();
+                }
+                return;
+              }
+              newStart = new Date(Math.max(newStart.getTime(), pStart.getTime()));
+              newEnd = new Date(Math.min(newEnd.getTime(), pEnd.getTime()));
+            }
+            updates.push(createAssignmentWithMerge(b.dataset.project, b.dataset.person, newStart, newEnd, b.dataset.assignment));
+          }
+        });
+
+        if (updates.length > 0) {
+          await Promise.all(updates);
         }
+        
         dragState.bar = null;
+        dragState.bars = [];
+        dragState.barStates = {};
       };
 
       let hoverPlaceholder = null;
@@ -1216,12 +1592,19 @@
 
       document.querySelectorAll('.person-chip').forEach(chip => {
         chip.addEventListener('dragstart', function(e) {
-          e.dataTransfer.setData('personId', this.dataset.person);
+          // 支持多个选中人员同时拖拽
+          const draggedPersonId = this.dataset.person;
+          let dragPersonIds = selectedPersonIds.length > 0 ? selectedPersonIds : [draggedPersonId];
+          e.dataTransfer.setData('personIds', JSON.stringify(dragPersonIds));
           e.dataTransfer.effectAllowed = 'copy';
           this.classList.add('dragging');
           isDraggingPerson = true;
-          // 高亮该人的所有条目
-          highlightPersonBars(this.dataset.person);
+          // 高亮所有拖拽的人员条目
+          dragPersonIds.forEach(personId => {
+            document.querySelectorAll(`.bar.person-bar[data-person="${personId}"]`).forEach(bar => {
+              bar.classList.add('person-highlight');
+            });
+          });
         });
         chip.addEventListener('dragend', function() {
           this.classList.remove('dragging');
@@ -1229,6 +1612,8 @@
           if (hoverPlaceholder) { hoverPlaceholder.remove(); hoverPlaceholder = null; }
           currentDropTarget = null;
           clearAllHighlights();
+          // 拖拽完成后清除所有选中
+          clearPersonSelection();
         });
       });
 
@@ -1294,8 +1679,16 @@
           currentDropTarget = null;
           clearAllHighlights();
 
-          const personId = e.dataTransfer.getData('personId');
-          if (!personId) return;
+          const personIdsStr = e.dataTransfer.getData('personIds');
+          let personIds = [];
+          try {
+            personIds = JSON.parse(personIdsStr);
+          } catch (err) {
+            const personId = e.dataTransfer.getData('personId');
+            if (personId) personIds = [personId];
+          }
+          if (personIds.length === 0) return;
+          
           const projectId = this.dataset.projectId;
           if (!projectId) return;
           const project = projects.find(proj => proj.id === projectId);
@@ -1313,7 +1706,10 @@
           if (endDate > pEnd) endDate = new Date(pEnd);
           if (startDate > pEnd) return;
 
-          await createAssignment(projectId, personId, startDate, endDate);
+          // 为每个选中的人员创建分配
+          for (const personId of personIds) {
+            await createAssignment(projectId, personId, startDate, endDate);
+          }
         });
       });
 
@@ -1435,8 +1831,16 @@
           currentDropTarget = null;
           clearAllHighlights();
 
-          const personId = e.dataTransfer.getData('personId');
-          if (!personId) return;
+          const personIdsStr = e.dataTransfer.getData('personIds');
+          let personIds = [];
+          try {
+            personIds = JSON.parse(personIdsStr);
+          } catch (err) {
+            const personId = e.dataTransfer.getData('personId');
+            if (personId) personIds = [personId];
+          }
+          if (personIds.length === 0) return;
+          
           const projectId = this.dataset.projectRow;
           if (!projectId) return;
           const project = projects.find(proj => proj.id === projectId);
@@ -1454,7 +1858,17 @@
           if (endDate > pEnd) endDate = new Date(pEnd);
           if (startDate > pEnd) return;
 
-          await createAssignment(projectId, personId, startDate, endDate);
+          // 为每个选中的人员创建分配
+          for (const personId of personIds) {
+            await createAssignment(projectId, personId, startDate, endDate);
+          }
+          if (endDate > pEnd) endDate = new Date(pEnd);
+          if (startDate > pEnd) return;
+
+          // 为每个选中的人员创建分配
+          for (const personId of personIds) {
+            await createAssignment(projectId, personId, startDate, endDate);
+          }
         });
       });
     }
