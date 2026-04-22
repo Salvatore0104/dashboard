@@ -142,9 +142,9 @@
       <span id="navTitle">Claw Dashboard 管理后台</span>
     </h1>
     <ul class="nav-menu">
-      <li class="nav-item" onclick="location.href='/dashboard.html'">前台看板</li>
+      <li class="nav-item" onclick="location.href='dashboard.html'">前台看板</li>
       <li class="nav-item active">后台管理</li>
-      <li class="nav-item" onclick="location.href='/tv.html'">电视看板</li>
+      <li class="nav-item" onclick="location.href='tv.html'">电视看板</li>
     </ul>
   </nav>
 
@@ -617,7 +617,7 @@
 
     async function loadProjects() {
       try {
-        const res = await fetch('/api/projects');
+        const res = await fetch('api/projects');
         projects = await res.json();
         renderProjects();
       } catch (e) {
@@ -628,7 +628,7 @@
 
     async function loadPersons() {
       try {
-        const res = await fetch('/api/persons');
+        const res = await fetch('api/persons');
         persons = await res.json();
         renderPersons();
         updateLeaveRecords();
@@ -640,7 +640,7 @@
 
     async function loadAssignments() {
       try {
-        const res = await fetch('/api/assignments');
+        const res = await fetch('api/assignments');
         assignments = await res.json();
       } catch (e) {
         console.warn('[loadAssignments] 加载失败，10秒后重试:', e.message);
@@ -759,7 +759,7 @@
       };
       
       try {
-        await fetch('/api/projects/' + projectId, {
+        await fetch('api/projects/' + projectId, {
           method: 'PUT',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(projectData)
@@ -1034,7 +1034,7 @@
       }
       
       try {
-        const res = await fetch('/api/leave/set', {
+        const res = await fetch('api/leave/set', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
@@ -1064,7 +1064,7 @@
       if (!confirm('确定要删除此请假记录吗？')) return;
       
       try {
-        const res = await fetch('/api/leave/set', {
+        const res = await fetch('api/leave/set', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
@@ -1133,7 +1133,7 @@
 
     async function loadConfig() {
       try {
-        const res = await fetch('/api/config');
+        const res = await fetch('api/config');
         const config = await res.json();
         document.getElementById('projectTitle').value = config.project_title || 'Claw 项目排期看板';
         document.getElementById('dingAppKey').value = config.ding_appKey || '';
@@ -1181,13 +1181,13 @@
       };
       
       if (editingProjectId) {
-        await fetch('/api/projects/' + editingProjectId, {
+        await fetch('api/projects/' + editingProjectId, {
           method: 'PUT',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(projectData)
         });
       } else {
-        await fetch('/api/projects', {
+        await fetch('api/projects', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(projectData)
@@ -1200,13 +1200,13 @@
 
     async function deleteProject(id) {
       if (!confirm('确定删除此项目？')) return;
-      await fetch('/api/projects/' + id, {method: 'DELETE'});
+      await fetch('api/projects/' + id, {method: 'DELETE'});
       loadProjects();
     }
 
     async function deletePerson(id) {
       if (!confirm('确定删除此人员？')) return;
-      await fetch('/api/persons/' + id, {method: 'DELETE'});
+      await fetch('api/persons/' + id, {method: 'DELETE'});
       loadPersons();
     }
 
@@ -1220,7 +1220,7 @@
         }
       });
 
-      await fetch('/api/config', {
+      await fetch('api/config', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
@@ -1248,7 +1248,7 @@
         return;
       }
       try {
-        const res = await fetch('/api/dingtalk/test', {
+        const res = await fetch('api/dingtalk/test', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({appKey, appSecret})
@@ -1266,8 +1266,8 @@
 
     async function clearAllData() {
       if (!confirm('确定清空所有数据？此操作不可恢复！')) return;
-      for (const p of projects) await fetch('/api/projects/' + p.id, {method: 'DELETE'});
-      for (const p of persons) await fetch('/api/persons/' + p.id, {method: 'DELETE'});
+      for (const p of projects) await fetch('api/projects/' + p.id, {method: 'DELETE'});
+      for (const p of persons) await fetch('api/persons/' + p.id, {method: 'DELETE'});
       loadProjects();
       loadPersons();
       alert('数据已清空');
@@ -1294,7 +1294,7 @@
       }
       document.getElementById('syncStatus').textContent = '正在获取...';
       try {
-        const res = await fetch('/api/dingtalk/users', {
+        const res = await fetch('api/dingtalk/users', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({appKey, appSecret})
@@ -1373,7 +1373,7 @@
       let success = 0;
       for (const person of selected) {
         try {
-          await fetch('/api/persons', {
+          await fetch('api/persons', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(person)
@@ -1394,7 +1394,7 @@
       // 先获取钉钉配置
       let appKey = '', appSecret = '';
       try {
-        const configRes = await fetch('/api/config');
+        const configRes = await fetch('api/config');
         const configData = await configRes.json();
         appKey = configData.ding_appKey || '';
         appSecret = configData.ding_appSecret || '';
@@ -1432,7 +1432,7 @@
       syncLeaveText.textContent = '正在同步请假状态...';
       
       try {
-        const res = await fetch('/api/leave/sync', {
+        const res = await fetch('api/leave/sync', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({ appKey: appKey, appSecret: appSecret, days: 30 })
@@ -1511,7 +1511,7 @@
     async function clearLeaveStatus() {
       if (!confirm('确定要清空所有人员的请假状态吗？')) return;
       try {
-        const res = await fetch('/api/leave/clear', {method: 'POST'});
+        const res = await fetch('api/leave/clear', {method: 'POST'});
         const result = await res.json();
         if (result.success) {
           alert('已清空所有请假状态');
@@ -1526,7 +1526,7 @@
 
     async function loadLeaveSchedule() {
       try {
-        const res = await fetch('/api/leave/schedule');
+        const res = await fetch('api/leave/schedule');
         const config = await res.json();
         document.getElementById('leaveSyncEnabled').checked = config.enabled !== false;
         document.getElementById('leaveSyncInterval').value = config.intervalHours || 4;
@@ -1537,7 +1537,7 @@
       const enabled = document.getElementById('leaveSyncEnabled').checked;
       const interval = parseInt(document.getElementById('leaveSyncInterval').value) || 4;
       try {
-        await fetch('/api/leave/schedule', {
+        await fetch('api/leave/schedule', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({ enabled: enabled, intervalHours: interval })
@@ -1583,7 +1583,7 @@
       if (!startDate || !endDate) { alert('请选择请假日期'); return; }
       
       try {
-        const res = await fetch('/api/leave/set', {
+        const res = await fetch('api/leave/set', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
@@ -1614,7 +1614,7 @@
       if (!confirm('确定要清空此人员的请假状态吗？')) return;
       
       try {
-        const res = await fetch('/api/leave/set', {
+        const res = await fetch('api/leave/set', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
@@ -1640,10 +1640,10 @@
 
     async function exportData() {
       // 导出人员数据
-      window.open('/api/export/csv', '_blank');
+      window.open('api/export/csv', '_blank');
       // 延迟导出项目分配数据
       setTimeout(() => {
-        window.open('/api/export/assignments/csv', '_blank');
+        window.open('api/export/assignments/csv', '_blank');
       }, 500);
     }
 
@@ -1664,7 +1664,7 @@
 
     async function loadSyncStatus() {
       try {
-        const res = await fetch('/api/leave/schedule');
+        const res = await fetch('api/leave/schedule');
         const config = await res.json();
         // 如果不是测试模式，才从服务器加载配置
         if (!testSyncMode) {
@@ -1789,7 +1789,7 @@
     
     function connectSyncEvents() {
       disconnectSyncEvents();
-      adminEventSource = new EventSource('/api/events');
+      adminEventSource = new EventSource('api/events');
       adminEventSource.addEventListener('persons_changed', () => {
         loadSyncStatus();
         loadPersons();
@@ -1834,7 +1834,7 @@
       initSyncStatus();
       connectSyncEvents();
       // 加载项目标题
-      fetch('/api/config')
+      fetch('api/config')
         .then(r => r.json())
         .then(config => {
           const title = (config.project_title || 'Claw 项目排期看板') + ' - 管理后台';

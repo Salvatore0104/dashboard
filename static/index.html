@@ -57,17 +57,17 @@
     <p>Python 虚拟环境已配置完成<br>Flask 后端服务运行中</p>
 
     <div class="menu-grid">
-      <a href="/dashboard.html" class="menu-item">
+      <a href="dashboard.html" class="menu-item">
         <div class="menu-icon">📊</div>
         <div class="menu-label">前台看板</div>
         <div class="menu-desc">查看项目甘特图</div>
       </a>
-      <a href="/admin.html" class="menu-item">
+      <a href="admin.html" class="menu-item">
         <div class="menu-icon">⚙</div>
         <div class="menu-label">后台管理</div>
         <div class="menu-desc">管理项目和人员</div>
       </a>
-      <a href="/tv.html" class="menu-item" style="grid-column: span 2;">
+      <a href="tv.html" class="menu-item" style="grid-column: span 2;">
         <div class="menu-icon">📺</div>
         <div class="menu-label">电视看板</div>
         <div class="menu-desc">大屏幕展示模式</div>
@@ -76,7 +76,7 @@
   </div>
   <script>
     // 加载项目标题
-    fetch('/api/config')
+    fetch('api/config')
       .then(r => r.json())
       .then(config => {
         const title = config.project_title || 'Claw 项目排期看板';

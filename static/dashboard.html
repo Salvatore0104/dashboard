@@ -212,8 +212,8 @@
     </h1>
     <ul class="nav-menu">
       <li class="nav-item active">前台看板</li>
-      <li class="nav-item" onclick="location.href='/admin.html'">后台管理</li>
-      <li class="nav-item" onclick="location.href='/tv.html'">电视看板</li>
+      <li class="nav-item" onclick="location.href='admin.html'">后台管理</li>
+      <li class="nav-item" onclick="location.href='tv.html'">电视看板</li>
     </ul>
   </nav>
 
@@ -378,10 +378,10 @@
     async function loadData() {
       try {
         const [pj, ps, as_, cfg] = await Promise.all([
-          fetch('/api/projects').then(r => r.json()),
-          fetch('/api/persons').then(r => r.json()),
-          fetch('/api/assignments').then(r => r.json()),
-          fetch('/api/config').then(r => r.json()).catch(() => ({}))
+          fetch('api/projects').then(r => r.json()),
+          fetch('api/persons').then(r => r.json()),
+          fetch('api/assignments').then(r => r.json()),
+          fetch('api/config').then(r => r.json()).catch(() => ({}))
         ]);
         projects = pj;
         persons = ps;
@@ -523,7 +523,7 @@
         document.getElementById('gantt').innerHTML = `
           <div class="empty">
             <div class="icon">📋</div>
-            <p>暂无项目，请先在<a href="/admin.html">后台管理</a>中添加项目和人员</p>
+            <p>暂无项目，请先在<a href="admin.html">后台管理</a>中添加项目和人员</p>
           </div>`;
         document.getElementById('personChips').innerHTML = '';
         return;
@@ -1031,11 +1031,11 @@
 
         // 删除需要合并的分配
         for (const a of toMerge) {
-          await fetch('/api/assignments/' + a.id, { method: 'DELETE' });
+          await fetch('api/assignments/' + a.id, { method: 'DELETE' });
         }
 
         // 创建合并后的新分配
-        await fetch('/api/assignments', {
+        await fetch('api/assignments', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1085,16 +1085,16 @@
           if (aStart < mergedStart) mergedStart = new Date(aStart);
           if (aEnd > mergedEnd) mergedEnd = new Date(aEnd);
         }
-        for (const a of toMerge) await fetch('/api/assignments/' + a.id, { method: 'DELETE' });
+        for (const a of toMerge) await fetch('api/assignments/' + a.id, { method: 'DELETE' });
 
         if (editingId) {
-          await fetch('/api/assignments/' + editingId, {
+          await fetch('api/assignments/' + editingId, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ startDate: dateStr(mergedStart), endDate: dateStr(mergedEnd) })
           });
         } else {
-          await fetch('/api/assignments', {
+          await fetch('api/assignments', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ projectId, personId, startDate: dateStr(mergedStart), endDate: dateStr(mergedEnd) })
@@ -1110,7 +1110,7 @@
       if (!confirm('确定要删除这条分配吗？')) return;
       sseLoadPending = true;
       try {
-        await fetch('/api/assignments/' + assignmentId, { method: 'DELETE' });
+        await fetch('api/assignments/' + assignmentId, { method: 'DELETE' });
         await loadData();
       } finally {
         sseLoadPending = false;
@@ -1482,7 +1482,7 @@
         if (isOutside && bar.dataset.assignment) {
           barsToUpdate.forEach(b => b.classList.remove('dragging'));
           if (confirm('确定删除此分配？')) {
-            await Promise.all(barsToUpdate.map(b => fetch('/api/assignments/' + b.dataset.assignment, {method: 'DELETE'})));
+            await Promise.all(barsToUpdate.map(b => fetch('api/assignments/' + b.dataset.assignment, {method: 'DELETE'})));
             await loadData();
           } else {
             render();
@@ -1564,7 +1564,7 @@
               const pEnd = parseDate(project.end_date, true);
               if (newEnd < pStart || newStart > pEnd) {
                 if (confirm('人员已拖出项目范围，是否删除此分配？')) {
-                  updates.push(fetch('/api/assignments/' + b.dataset.assignment, {method: 'DELETE'}));
+                  updates.push(fetch('api/assignments/' + b.dataset.assignment, {method: 'DELETE'}));
                 } else {
                   render();
                 }
@@ -1953,7 +1953,7 @@
     function connectSSE() {
       disconnectSSE();
       
-      mainEventSource = new EventSource('/api/events');
+      mainEventSource = new EventSource('api/events');
       
       mainEventSource.addEventListener('projects_changed', () => { 
         if (!sseLoadPending) loadData(); 
@@ -1989,7 +1989,7 @@
 
     async function loadSyncStatus() {
       try {
-        const res = await fetch('/api/leave/schedule');
+        const res = await fetch('api/leave/schedule');
         const config = await res.json();
         syncIntervalHours = config.intervalHours || 4;
         syncEnabled = config.enabled !== false;

@@ -166,10 +166,10 @@
     async function loadData() {
       try {
         const [pj, ps, as_, cfg] = await Promise.all([
-          fetch('/api/projects').then(r => r.json()),
-          fetch('/api/persons').then(r => r.json()),
-          fetch('/api/assignments').then(r => r.json()),
-          fetch('/api/config').then(r => r.json()).catch(() => ({}))
+          fetch('api/projects').then(r => r.json()),
+          fetch('api/persons').then(r => r.json()),
+          fetch('api/assignments').then(r => r.json()),
+          fetch('api/config').then(r => r.json()).catch(() => ({}))
         ]);
         projects = pj;
         persons = ps;
@@ -200,7 +200,7 @@
 
     // SSE 实时更新
     function connectSSE() {
-      const eventSource = new EventSource('/api/events');
+      const eventSource = new EventSource('api/events');
 
       eventSource.addEventListener('projects_changed', () => { console.log('[TV] 项目变更，重新加载'); loadData(); });
       eventSource.addEventListener('persons_changed', () => { console.log('[TV] 人员变更，重新加载'); loadData(); });
@@ -350,7 +350,7 @@
         document.getElementById('gantt').innerHTML = `
           <div class="empty">
             <div class="icon">&#128203;</div>
-            <p>暂无项目，请先在<a href="/admin.html">后台管理</a>中添加项目和人员</p>
+            <p>暂无项目，请先在<a href="admin.html">后台管理</a>中添加项目和人员</p>
           </div>`;
         return;
       }
