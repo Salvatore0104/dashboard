@@ -15,7 +15,7 @@ app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
 
 PORT = int(os.getenv('PORT', 5000))
-DB_PATH = os.path.join(os.path.dirname(__file__), 'claw.db')
+DB_PATH = os.environ.get('DB_PATH', os.path.join(os.path.dirname(__file__), 'claw.db'))
 
 # SSE 订阅者队列
 sse_clients = []

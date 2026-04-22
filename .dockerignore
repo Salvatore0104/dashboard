@@ -1,0 +1,17 @@
+# Git
+.git
+.gitignore
+
+# 已打包文件
+*.tar
+claw-dashboard.tar
+
+# 运行时文件
+claw.db
+*.db
+
+# 脚本
+deploy.sh
+
+# 文档
+README.md
