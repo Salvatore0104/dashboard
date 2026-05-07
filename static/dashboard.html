@@ -601,16 +601,11 @@
         sortedPersonIds.forEach(personId => {
           const person = persons.find(x => x.id === personId);
           if (person) {
-            // 检查该人员在当前视图范围内是否有可见分配
-            const now = new Date();
-            now.setHours(0, 0, 0, 0);
-            const viewEndDate = new Date(baseDate);
-            viewEndDate.setDate(viewEndDate.getDate() + displayDays - 1);
-            const personAssignments = assignments.filter(a => a.person_id === personId);
-            // 判断分配是否在视图范围内可见（结束日期 >= 视图开始日期）
+            // 检查该人员在当前项目是否有可见分配（结束日期 >= 视图开始日期）
+            const personAssignments = personGroups[personId];
             const hasVisibleAssignment = personAssignments.some(a => {
               const aEnd = parseDate(a.end_date, true);
-              return aEnd >= baseDate; // 结束日期 >= 视图开始日期，说明在视图中可见
+              return aEnd >= baseDate;
             });
             if (!hasVisibleAssignment) return; // 该人员在当前视图范围内没有可见分配，隐藏此行
 
