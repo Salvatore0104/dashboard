@@ -419,6 +419,7 @@
         });
 
         sortedPersonIds.forEach(personId => {
+          const personAssignments = personGroups[personId];
           const person = persons.find(x => x.id === personId);
           if (person) {
             // 检查该人员在当前项目是否有可见分配
