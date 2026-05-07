@@ -276,6 +276,17 @@
       return '其他';
     }
 
+    // 判断人员在指定日期后是否有有效的分配（包括今天）
+    function hasActiveAssignment(personId) {
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      const personAssignments = assignments.filter(a => a.person_id === personId);
+      return personAssignments.some(a => {
+        const aEnd = parseDate(a.end_date, true);
+        return aEnd >= now; // 结束日期 >= 今天，说明还有效或今天结束
+      });
+    }
+
     function getDates() {
       const dates = [];
       const baseDate = new Date(today.getTime() + viewOffset * 86400000);
@@ -410,6 +421,17 @@
         sortedPersonIds.forEach(personId => {
           const person = persons.find(x => x.id === personId);
           if (person) {
+            // 检查该人员在当前视图范围内是否有可见分配
+            const now = new Date();
+            now.setHours(0, 0, 0, 0);
+            const personAssignments = assignments.filter(a => a.person_id === personId);
+            // 判断分配是否在视图范围内可见（结束日期 >= 视图开始日期）
+            const hasVisibleAssignment = personAssignments.some(a => {
+              const aEnd = parseDate(a.end_date, true);
+              return aEnd >= baseDate; // 结束日期 >= 视图开始日期，说明在视图中可见
+            });
+            if (!hasVisibleAssignment) return; // 该人员在当前视图范围内没有可见分配，隐藏此行
+
             const leaveRange = getLeaveRange(personId);
             let leaveBadge = '';
             if (leaveRange) {
@@ -518,6 +540,13 @@
           const person = persons.find(x => x.id === personId);
           const personColor = getPersonColor(person);
           const leaveRange = getLeaveRange(personId);
+
+          // 检查该人员在当前视图范围内是否有可见分配
+          const hasVisibleAssignment = personAssignments.some(a => {
+            const aEnd = parseDate(a.end_date, true);
+            return aEnd >= baseDate; // 结束日期 >= 视图开始日期，说明在视图中可见
+          });
+          if (!hasVisibleAssignment) return; // 该人员在当前视图范围内没有可见分配，隐藏此行
 
           personAssignments.sort((a, b) => {
             const aStart = parseDate(a.start_date);
