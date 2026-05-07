@@ -75,6 +75,9 @@
     .date-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; border-right: 1px solid #f0f0f0; font-size: 13px; cursor: grab; user-select: none; transition: all 0.2s; position: relative; flex-shrink: 0; }
     .date-cell:hover { background: rgba(102,126,234,0.08); }
     .date-cell.today { background: linear-gradient(135deg, #e6f4ff, #bae0ff) !important; border-right: 2px solid #667eea; }
+    .date-cell.today .date-num { color: #667eea !important; }
+    .date-cell.weekend .date-num,
+    .date-cell.weekend .date-week { color: #ff4d4f !important; }
     .date-cell.month-start { border-left: 2px solid #667eea; }
     .date-num { font-weight: 700; font-size: 14px; }
     .date-week { font-size: 11px; color: #999; margin-top: 2px; }
