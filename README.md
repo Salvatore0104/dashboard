@@ -73,24 +73,68 @@ python app.py
 
 ## 服务器部署
 
-### 方式一：一键部署（推荐）
+### Docker 部署（推荐）
 
-1. 在服务器上下载并运行部署脚本：
+**前提条件**：服务器已安装 Docker。
+
+#### 初次部署
+
 ```bash
-# 下载部署脚本
-curl -O https://raw.githubusercontent.com/Salvatore0104/dashboard/main/deploy.sh
-chmod +x deploy.sh
+# 1. 克隆项目
+git clone https://github.com/Salvatore0104/dashboard.git /root/claw-dashboard
+cd /root/claw-dashboard
 
-# 运行部署（需要 root 权限）
-sudo bash deploy.sh
+# 2. 构建镜像
+docker build -t claw-dashboard:latest .
+
+# 3. 启动容器（挂载 /data/claw 持久化数据库）
+docker run -d \
+  --name claw-dashboard \
+  -p 5000:5000 \
+  -v /data/claw:/data/claw \
+  --restart=always \
+  claw-dashboard:latest
 ```
 
-2. 如需从 GitHub 自动拉取代码：
+#### 更新部署
+
 ```bash
-GITHUB_REPO=https://github.com/Salvatore0104/dashboard.git sudo bash deploy.sh
+cd /root/claw-dashboard
+git pull
+docker build -t claw-dashboard:latest .
+docker stop claw-dashboard
+docker rm claw-dashboard
+docker run -d \
+  --name claw-dashboard \
+  -p 5000:5000 \
+  -v /data/claw:/data/claw \
+  --restart=always \
+  claw-dashboard:latest
 ```
 
-### 方式二：手动部署
+也可以直接运行服务器上的 `deploy.sh` 一键更新：
+
+```bash
+cd /root/claw-dashboard && bash deploy.sh
+```
+
+#### Docker 常用命令
+
+```bash
+# 查看容器状态
+docker ps --filter name=claw-dashboard
+
+# 查看日志
+docker logs -f --tail=50 claw-dashboard
+
+# 停止容器
+docker stop claw-dashboard
+
+# 重启容器
+docker restart claw-dashboard
+```
+
+### 手动部署（不使用 Docker）
 
 1. 上传项目到服务器：
 ```bash
