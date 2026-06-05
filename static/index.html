@@ -3,87 +3,65 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title id="pageTitle">Claw 项目排期看板</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-    .container {
-      background: white;
-      border-radius: 12px;
-      padding: 40px;
-      max-width: 600px;
-      text-align: center;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-    }
-    h1 { color: #333; margin-bottom: 16px; font-size: 28px; }
-    p { color: #666; margin-bottom: 24px; line-height: 1.6; }
-    .status {
-      background: #e6f4ff;
-      border: 2px solid #1890ff;
-      border-radius: 8px;
-      padding: 16px;
-      margin-bottom: 20px;
-    }
-    .status.success { border-color: #52c41a; background: #f6ffed; }
-    .status-icon { font-size: 48px; margin-bottom: 8px; }
-    .menu-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      margin-top: 24px;
-    }
-    .menu-item {
-      padding: 16px;
-      background: #f5f5f5;
-      border-radius: 8px;
-      cursor: pointer;
-      transition: all 0.2s;
-      text-decoration: none;
-      color: #333;
-    }
-    .menu-item:hover { background: #1890ff; color: white; transform: translateY(-2px); }
-    .menu-icon { font-size: 32px; margin-bottom: 8px; }
-    .menu-label { font-weight: bold; }
-    .menu-desc { font-size: 12px; opacity: 0.7; margin-top: 4px; }
-  </style>
+  <title>Claw 项目排期看板</title>
+  <link rel="stylesheet" href="styles.css?v=20260605-h5y">
+  <script src="icons.js?v=20260605-h5y"></script>
 </head>
 <body>
-  <div class="container">
-    <div class="status success">
-      <div class="status-icon">✅</div>
-      <h2>服务已启动</h2>
-    </div>
-    <h1 id="mainTitle">Claw 项目排期看板</h1>
-    <p>Python 虚拟环境已配置完成<br>Flask 后端服务运行中</p>
+  <div class="app-shell">
+    <nav class="top-nav">
+      <div class="brand">
+        <span class="brand-mark loading" data-icon="board"></span>
+        <span class="brand-title loading" id="navTitle">Claw 项目排期看板</span>
+      </div>
+      <div class="nav-links">
+        <a class="nav-link" href="dashboard.html" data-nav-icon="board">前台看板</a>
+        <a class="nav-link" href="admin.html" data-nav-icon="admin">后台管理</a>
+        <a class="nav-link" href="tv.html" data-nav-icon="tv">电视看板</a>
+      </div>
+    </nav>
 
-    <div class="menu-grid">
-      <a href="dashboard.html" class="menu-item">
-        <div class="menu-icon">📊</div>
-        <div class="menu-label">前台看板</div>
-        <div class="menu-desc">查看项目甘特图</div>
-      </a>
-      <a href="admin.html" class="menu-item">
-        <div class="menu-icon">⚙</div>
-        <div class="menu-label">后台管理</div>
-        <div class="menu-desc">管理项目和人员</div>
-      </a>
-      <a href="tv.html" class="menu-item" style="grid-column: span 2;">
-        <div class="menu-icon">📺</div>
-        <div class="menu-label">电视看板</div>
-        <div class="menu-desc">大屏幕展示模式</div>
-      </a>
-    </div>
+    <main class="main home">
+      <section class="home-panel">
+        <h1 class="home-title loading" id="mainTitle">Claw 项目排期看板</h1>
+        <p class="home-subtitle">项目甘特图、人员分配、请假与出差状态集中管理。选择一个入口开始工作。</p>
+        <div class="entry-grid">
+          <a class="entry-card" href="dashboard.html">
+            <span data-icon="board"></span>
+            <span class="entry-title">前台看板</span>
+            <span class="entry-desc">查看排期、拖拽分配人员、调整任务时间。</span>
+          </a>
+          <a class="entry-card" href="admin.html">
+            <span data-icon="admin"></span>
+            <span class="entry-title">后台管理</span>
+            <span class="entry-desc">管理项目、人员、配置、请假和出差信息。</span>
+          </a>
+          <a class="entry-card" href="tv.html">
+            <span data-icon="tv"></span>
+            <span class="entry-title">电视看板</span>
+            <span class="entry-desc">只读展示前台看板，适合会议室或大屏播放。</span>
+          </a>
+        </div>
+      </section>
+    </main>
   </div>
+
   <script>
-    // 加载项目标题
-    fetch('api/config')
-      .then(r => r.json())
-      .then(config => {
-        const title = config.project_title || 'Claw 项目排期看板';
-        document.title = title;
-        document.getElementById('mainTitle').textContent = title;
-      })
-      .catch(() => {});
+    document.querySelectorAll("[data-icon]").forEach((el) => el.innerHTML = Icons.svg(el.dataset.icon));
+    document.querySelectorAll("[data-nav-icon]").forEach((el) => el.insertAdjacentHTML("afterbegin", Icons.svg(el.dataset.navIcon)));
+    fetch("api/config").then((r) => r.json()).then((config) => {
+      const title = config.project_title || "Claw 项目排期看板";
+      document.title = title;
+      const navTitle = document.getElementById("navTitle");
+      navTitle.textContent = title;
+      navTitle.classList.remove("loading");
+      const mainTitle = document.getElementById("mainTitle");
+      mainTitle.textContent = title;
+      mainTitle.classList.remove("loading");
+      const primary = config.theme_primary || config.primary_color || "#3157d5";
+      document.documentElement.style.setProperty("--primary", primary);
+      document.querySelector(".brand-mark")?.classList.remove("loading");
+    }).catch(() => {});
   </script>
 </body>
 </html>

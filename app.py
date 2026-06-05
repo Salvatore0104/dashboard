@@ -234,49 +234,70 @@ def get_persons():
 @app.route('/api/persons', methods=['POST'])
 def create_person():
     data = request.json
+    if not data:
+        return jsonify({"success": False, "message": "请求数据为空"}), 400
     # 使用钉钉ID作为主键，如果没有则生成时间戳ID
     pid = data.get('dingId') or data.get('id') or str(int(time.time() * 1000))
+    name = data.get('name', '').strip()
+    if not name:
+        return jsonify({"success": False, "message": "人员姓名不能为空"}), 400
     
     conn = get_db()
+    try:
+        # 先查询是否存在该人员
+        existing = conn.execute('SELECT * FROM persons WHERE id = ?', (pid,)).fetchone()
+        
+        if existing:
+            # 存在则更新（保留请假状态等原有数据，只更新基本信息）
+            conn.execute('''
+                UPDATE persons SET 
+                    name = ?,
+                    group_type = ?,
+                    avatar = ?,
+                    ding_id = ?,
+                    department = ?,
+                    selected = ?
+                WHERE id = ?
+            ''', (
+                name,
+                data.get('groupType', 'pre'),
+                data.get('avatar', ''),
+                data.get('dingId', ''),
+                data.get('department', ''),
+                1 if data.get('selected') else 0,
+                pid
+            ))
+            print(f"[PERSON] 更新人员: id={pid}, name={name}")
+        else:
+            # 不存在则插入
+            conn.execute('''
+                INSERT INTO persons (id, name, group_type, avatar, ding_id, department, selected, sort_order, leave_status, leave_start, leave_end, leave_type)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            ''', (
+                pid, name, data.get('groupType', 'pre'), data.get('avatar', ''),
+                data.get('dingId', ''), data.get('department', ''),
+                1 if data.get('selected') else 0, data.get('sortOrder', 0),
+                data.get('leaveStatus', ''), data.get('leaveStart', ''), data.get('leaveEnd', ''),
+                data.get('leaveType', '')
+            ))
+            print(f"[PERSON] 新增人员: id={pid}, name={name}, ding_id={data.get('dingId', '')}")
+        
+        conn.commit()
+        
+        # 验证写入
+        verify = conn.execute('SELECT COUNT(*) FROM persons WHERE id = ?', (pid,)).fetchone()
+        if verify[0] == 0:
+            print(f"[PERSON] 警告：写入后验证失败！id={pid}")
+            return jsonify({"success": False, "message": "人员写入数据库失败，请重试"}), 500
+        
+        print(f"[PERSON] 写入成功，当前人员总数: {conn.execute('SELECT COUNT(*) FROM persons').fetchone()[0]}")
+    except Exception as e:
+        conn.rollback()
+        print(f"[PERSON] 写入异常: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
+    finally:
+        conn.close()
     
-    # 先查询是否存在该人员
-    existing = conn.execute('SELECT * FROM persons WHERE id = ?', (pid,)).fetchone()
-    
-    if existing:
-        # 存在则更新（保留请假状态等原有数据，只更新基本信息）
-        conn.execute('''
-            UPDATE persons SET 
-                name = ?,
-                group_type = ?,
-                avatar = ?,
-                ding_id = ?,
-                department = ?,
-                selected = ?
-            WHERE id = ?
-        ''', (
-            data['name'],
-            data.get('groupType', 'pre'),
-            data.get('avatar', ''),
-            data.get('dingId', ''),
-            data.get('department', ''),
-            1 if data.get('selected') else 0,
-            pid
-        ))
-    else:
-        # 不存在则插入
-        conn.execute('''
-            INSERT INTO persons (id, name, group_type, avatar, ding_id, department, selected, sort_order, leave_status, leave_start, leave_end, leave_type)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-        ''', (
-            pid, data['name'], data.get('groupType', 'pre'), data.get('avatar', ''),
-            data.get('dingId', ''), data.get('department', ''),
-            1 if data.get('selected') else 0, data.get('sortOrder', 0),
-            data.get('leaveStatus', ''), data.get('leaveStart', ''), data.get('leaveEnd', ''),
-            data.get('leaveType', '')
-        ))
-    
-    conn.commit()
-    conn.close()
     broadcast('persons_changed', {'action': 'create', 'id': pid})
     return jsonify({'success': True, 'id': pid})
 
@@ -563,13 +584,25 @@ def get_dingtalk_users():
 def sync_leave():
     """同步请假状态 - 从钉钉获取请假数据"""
     data = request.json
-    app_key = data.get('appKey')
-    app_secret = data.get('appSecret')
+    if data is None:
+        data = {}
+    app_key = data.get('appKey') or data.get('ding_appKey')
+    app_secret = data.get('appSecret') or data.get('ding_appSecret')
     # 默认同步未来30天
     days = int(data.get('days', 30))
     
+    # 如果请求中没有传凭证，从 config 表读取
     if not app_key or not app_secret:
-        return jsonify({"success": False, "message": "请提供 AppKey 和 AppSecret"})
+        conn = get_db()
+        config = {r['key']: r['value'] for r in conn.execute('SELECT key, value FROM config').fetchall()}
+        conn.close()
+        app_key = app_key or config.get('ding_appKey')
+        app_secret = app_secret or config.get('ding_appSecret')
+        print(f"[Leave Sync] 从config读取: appKey={'已设置' if app_key else '未设置'}, appSecret={'已设置' if app_secret else '未设置'}")
+        print(f"[Leave Sync] config keys: {list(config.keys())}")
+    
+    if not app_key or not app_secret:
+        return jsonify({"success": False, "message": "请先在系统配置中填写钉钉 AppKey 和 AppSecret"})
     
     try:
         # 使用旧版API获取AccessToken（旧版请假API需要旧版token）
