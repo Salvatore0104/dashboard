@@ -2,16 +2,35 @@
 .git
 .gitignore
 
-# 已打包文件
-*.tar
-claw-dashboard.tar
+# IDE / Editor
+.codebuddy
+.vscode
+.idea
 
-# 运行时文件
-claw.db
-*.db
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.env
+venv/
+.venv/
 
-# 脚本
+# Deploy scripts (not needed in container)
+deploy_server.bat
+deploy_server.sh
+deploy_to_server.py
+build-docker.sh
 deploy.sh
 
-# 文档
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Output files
+*.tar
+*.tar.gz
+
+# README
 README.md
