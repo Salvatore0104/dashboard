@@ -538,6 +538,17 @@ a {
   background: #fbfdff;
 }
 
+.project-trip-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: var(--trip-active, var(--trip));
+  margin-left: auto;
+}
+
 .gantt-row-label.person.person-hover,
 .gantt-row-label.person.person-active {
   background: var(--primary-soft);

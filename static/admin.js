@@ -86,6 +86,7 @@
     state.persons = persons;
     state.assignments = assignments;
     state.config = config || {};
+    window.ThemeStore?.save(state.config);
     applyThemeConfig();
     renderProjects();
     renderPersons();
@@ -537,6 +538,7 @@
       body[input.dataset.key] = input.value;
     });
     await fetch("api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    window.ThemeStore?.save({ ...state.config, ...body });
     closeModal("configModal");
     await loadAll();
     toast("配置已保存");

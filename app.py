@@ -1014,10 +1014,13 @@ def get_leave_schedule():
         rows = conn.execute('SELECT key, value FROM config WHERE key LIKE "leave_sync_%"').fetchall()
         conn.close()
         config = {r['key']: r['value'] for r in rows}
+        interval_hours = int(config.get('leave_sync_interval', 4))
+        last_sync_time = int(config.get('leave_sync_last_time', 0))
         return jsonify({
-            "intervalHours": int(config.get('leave_sync_interval', 4)),
+            "intervalHours": interval_hours,
             "enabled": config.get('leave_sync_enabled', '1') == '1',
-            "lastSyncTime": int(config.get('leave_sync_last_time', 0))
+            "lastSyncTime": last_sync_time,
+            "nextSyncTime": last_sync_time + interval_hours * 3600 * 1000 if last_sync_time else 0
         })
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
@@ -1082,33 +1085,55 @@ def schedule_leave_sync():
     """定时同步请假状态"""
     global leave_sync_interval, leave_sync_enabled
     while True:
-        if leave_sync_enabled:
+        sleep_seconds = 60
+        if True:
             try:
                 conn = get_db()
                 config = {r['key']: r['value'] for r in conn.execute('SELECT key, value FROM config').fetchall()}
                 conn.close()
                 
                 # 读取配置
-                interval = int(config.get('leave_sync_interval', 4))
+                interval = max(1, int(config.get('leave_sync_interval', 4)))
                 enabled = config.get('leave_sync_enabled', '1') == '1'
+                last_sync = int(config.get('leave_sync_last_time', 0) or 0)
                 
                 leave_sync_interval = interval
                 leave_sync_enabled = enabled
                 
                 if enabled:
+                    now_ms = int(time.time() * 1000)
+                    interval_ms = interval * 3600 * 1000
+                    due_ms = last_sync + interval_ms if last_sync else 0
+                    remaining_ms = due_ms - now_ms
+                    if remaining_ms > 0:
+                        sleep_seconds = max(5, min(60, remaining_ms / 1000))
+                        time.sleep(sleep_seconds)
+                        continue
                     app_key = config.get('ding_appKey')
                     app_secret = config.get('ding_appSecret')
                     
                     if app_key and app_secret:
                         print(f"[AutoSync] 开始定时同步请假状态...")
-                        result = sync_leave_internal(app_key, app_secret)
+                        result = run_leave_sync_job(app_key, app_secret)
                         print(f"[AutoSync] Leave sync result: {result}")
             except Exception as e:
                 print(f"[AutoSync] Error: {e}")
         
         # 读取最新配置作为休眠时间
-        sleep_seconds = leave_sync_interval * 3600
+        sleep_seconds = min(60, leave_sync_interval * 3600)
         time.sleep(sleep_seconds)
+
+def run_leave_sync_job(app_key, app_secret, days=30):
+    """定时任务复用手动同步入口，避免两套钉钉同步逻辑分叉。"""
+    with app.test_request_context('/api/leave/sync', method='POST', json={
+        'appKey': app_key,
+        'appSecret': app_secret,
+        'days': days
+    }):
+        response = sync_leave()
+        if hasattr(response, 'get_json'):
+            return response.get_json()
+        return response
 
 def sync_leave_internal(app_key, app_secret):
     """内部函数：同步请假状态（供定时任务调用）"""
@@ -1206,9 +1231,17 @@ def sync_leave_internal(app_key, app_secret):
         return {"success": False, "message": str(e)}
 
 # 启动定时任务线程
-import threading
-sync_thread = threading.Thread(target=schedule_leave_sync, daemon=True)
-sync_thread.start()
+leave_scheduler_thread = None
+leave_scheduler_lock = threading.Lock()
+
+def start_leave_sync_scheduler():
+    """启动一次请假定时同步线程。"""
+    global leave_scheduler_thread
+    with leave_scheduler_lock:
+        if leave_scheduler_thread and leave_scheduler_thread.is_alive():
+            return
+        leave_scheduler_thread = threading.Thread(target=schedule_leave_sync, daemon=True, name="leave-sync-scheduler")
+        leave_scheduler_thread.start()
 
 # ==================== 静态文件 ====================
 
@@ -1233,6 +1266,7 @@ def health():
 
 if __name__ == '__main__':
     init_db()
+    start_leave_sync_scheduler()
     
     # 启动时自动同步一次请假信息
     def startup_sync_leave():

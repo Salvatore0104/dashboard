@@ -196,6 +196,7 @@
         this.state.persons = persons;
         this.state.assignments = assignments;
         this.state.config = config || {};
+        window.ThemeStore?.save(this.state.config);
         this.applyConfig();
         this.render();
         if (this.els.updateTime) {
@@ -571,7 +572,9 @@
     renderLeft(model) {
       let html = `<div class="gantt-left"><div class="gantt-left-head">${Icons.svg("board")}项目 / 人员</div>`;
       for (const project of model.visibleProjects) {
-        html += `<div class="gantt-row-label project"><span class="row-dot" style="background:${esc(project.color || "#2563eb")}"></span><span title="${esc(project.name)}">${esc(project.name)}</span></div>`;
+        const trip = getTrip(project);
+        const tripTitle = trip ? `出差 ${dateStr(trip.start)} ~ ${dateStr(trip.end)}` : "";
+        html += `<div class="gantt-row-label project"><span class="row-dot" style="background:${esc(project.color || "#2563eb")}"></span><span title="${esc(project.name)}">${esc(project.name)}</span>${trip ? `<span class="project-trip-icon" title="${esc(tripTitle)}">${Icons.svg("plane")}</span>` : ""}</div>`;
         const ids = this.getVisiblePersonIds(project, model);
         for (const personId of ids) {
           const person = model.personById.get(String(personId));
@@ -634,9 +637,8 @@
         const left = rowStart * this.state.colWidth;
         const width = (rowEnd - rowStart + 1) * this.state.colWidth - 4;
         const style = this.buildBarStyle(project.color || "#2563eb", project, null, rowStart, rowEnd, model);
-        const markers = this.renderTripMarkers(project, rowStart, rowEnd, model);
         bar = `<div class="bar project-bar" data-project="${esc(project.id)}" style="left:${left}px;width:${width}px;${style}">
-          <span class="bar-label">${esc(project.name)}</span>${markers}
+          <span class="bar-label">${esc(project.name)}</span>
         </div>`;
       }
       return `<div class="gantt-row project-drop-row" data-project-id="${esc(project.id)}">${bar}</div>`;
