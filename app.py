@@ -28,6 +28,19 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+def clear_expired_leave_status(conn, today=None):
+    """Clear leave status whose end date is before today."""
+    today = today or time.strftime('%Y-%m-%d')
+    cursor = conn.execute('''
+        UPDATE persons SET
+            leave_status = '',
+            leave_start = '',
+            leave_end = '',
+            leave_type = ''
+        WHERE leave_end != '' AND leave_end < ?
+    ''', (today,))
+    return cursor.rowcount
+
 def init_db():
     conn = get_db()
     c = conn.cursor()
@@ -618,6 +631,7 @@ def sync_leave():
         
         conn = get_db()
         db_persons = conn.execute('SELECT * FROM persons').fetchall()
+        clear_expired_leave_status(conn)
         
         # 计算日期范围 - 毫秒时间戳
         from datetime import datetime, timedelta
@@ -711,7 +725,15 @@ def sync_leave():
                             WHERE id = ?
                         ''', (leave_type_name, start_date, end_date, leave_type_name, person['id']))
                         updated += 1
-                    # 如果无请假记录，保留现有数据（不清空）
+                    else:
+                        conn.execute('''
+                            UPDATE persons SET
+                                leave_status = '',
+                                leave_start = '',
+                                leave_end = '',
+                                leave_type = ''
+                            WHERE id = ?
+                        ''', (person['id'],))
                 else:
                     err_msg = leave_result.get('errmsg', '未知错误')
                     print(f"[Leave Sync] {person['name']} 查询失败: {err_msg}")
@@ -1049,6 +1071,7 @@ def sync_dingtalk_leave_internal(app_key, app_secret):
         
         conn = get_db()
         persons = conn.execute('SELECT * FROM persons').fetchall()
+        clear_expired_leave_status(conn)
         
         today_str = time.strftime('%Y-%m-%d')
         tomorrow_str = time.strftime('%Y-%m-%d', time.localtime(time.time() + 86400))
@@ -1154,6 +1177,7 @@ def sync_leave_internal(app_key, app_secret):
         # 同步未来30天
         today = time.strftime('%Y-%m-%d')
         future_date = time.strftime('%Y-%m-%d', time.localtime(time.time() + 30 * 86400))
+        clear_expired_leave_status(conn, today=today)
         
         updated = 0
         
@@ -1363,6 +1387,18 @@ if __name__ == '__main__':
                                     conn2.commit()
                                     conn2.close()
                                     updated += 1
+                                else:
+                                    conn2 = get_db()
+                                    conn2.execute('''
+                                        UPDATE persons SET
+                                            leave_status = '',
+                                            leave_start = '',
+                                            leave_end = '',
+                                            leave_type = ''
+                                        WHERE id = ?
+                                    ''', (person['id'],))
+                                    conn2.commit()
+                                    conn2.close()
                         except Exception as e:
                             print(f"[Startup] {person['name']} 处理异常: {e}")
                     
