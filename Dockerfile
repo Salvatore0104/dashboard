@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM registry.cn-shanghai.aliyuncs.com/easyaigc/sandbox:latest
 
 WORKDIR /app
 
