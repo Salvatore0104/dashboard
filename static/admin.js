@@ -442,8 +442,8 @@
     els.conflictColor.value = state.config.conflict_color || "#dc2626";
     els.easyaiAdminUsername.value = state.config.easyai_admin_username || "";
     els.easyaiAdminPassword.value = "";
-    els.easyaiAdminPassword.placeholder = state.config.easyai_admin_password_masked ? `已配置 ${state.config.easyai_admin_password_masked}，留空保持不变` : "请输入管理员密码";
-    els.easyaiAdminPasswordStatus.textContent = state.config.easyai_admin_password_configured ? `已配置 ${state.config.easyai_admin_password_masked || ""}` : "未配置";
+    els.easyaiAdminPassword.placeholder = state.config.easyai_admin_password_configured ? "已配置，留空保持不变" : "请输入管理员密码";
+    els.easyaiAdminPasswordStatus.textContent = state.config.easyai_admin_password_configured ? "已配置" : "未配置";
     els.easyaiAdminPasswordStatus.className = `tag ${state.config.easyai_admin_password_configured ? "tag-primary" : ""}`;
     els.easyaiTestResult.style.display = "none";
     els.dingTestResult.style.display = "none";

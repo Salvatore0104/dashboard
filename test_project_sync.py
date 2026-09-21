@@ -114,7 +114,7 @@ class ProjectSyncUnitTests(unittest.TestCase):
         )
         runtime = load_easyai_runtime_config(self.conn)
         self.assertEqual(runtime["base_url"], "https://wowidea.top/api")
-        self.assertEqual(runtime["auth_path"], "/auth/boss/login")
+        self.assertEqual(runtime["auth_path"], "/auth/login")
         self.assertEqual(runtime["username_field"], "username")
         self.assertEqual(runtime["password_field"], "password")
 
@@ -131,11 +131,26 @@ class ProjectSyncUnitTests(unittest.TestCase):
             def json(self):
                 return {"data": {"access_token": "jwt-value"}, "expires_in": 300}
 
-        client = EasyAIClient({"base_url": "https://wowidea.top/api", "username": "admin", "password": "secret"})
+        client = EasyAIClient({"base_url": "https://wowidea.top/api", "username": "admin-fallback-2", "password": "secret"})
         with patch("project_sync.requests.post", return_value=Response()) as login:
             self.assertEqual(client._headers()["Authorization"], "Bearer jwt-value")
             self.assertEqual(client._headers()["Authorization"], "Bearer jwt-value")
             self.assertEqual(login.call_count, 1)
+
+    def test_login_404_falls_back_without_exposing_path(self):
+        class Response:
+            def __init__(self, status_code):
+                self.status_code = status_code
+                self.ok = status_code == 200
+                self.content = b'{"access_token":"jwt-value"}' if self.ok else b''
+
+            def json(self):
+                return {"access_token": "jwt-value"}
+
+        client = EasyAIClient({"base_url": "https://wowidea.top/api", "username": "admin-fallback-3", "password": "secret"})
+        with patch("project_sync.requests.post", side_effect=[Response(404), Response(200)]) as login:
+            self.assertEqual(client._headers()["Authorization"], "Bearer jwt-value")
+            self.assertEqual(login.call_count, 2)
 
     def test_admin_page_has_independent_login_save_control(self):
         html = Path(__file__).with_name("static").joinpath("admin.html").read_text(encoding="utf-8")
@@ -144,6 +159,7 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.assertIn("保存 wowidea 登录配置", html)
         self.assertIn("async function saveEasyAIAuthConfig", js)
         self.assertIn('body = { easyai_admin_username: username }', js)
+        self.assertIn('state.config.easyai_admin_password_configured ? "已配置"', js)
 
 
 if __name__ == "__main__":
