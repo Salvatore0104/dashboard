@@ -44,6 +44,7 @@
       "btProjectId", "btProjectName", "projectBusinessTrip", "projectBusinessTripStart", "projectBusinessTripEnd", "businessTripPersons",
       "syncPersonsList", "syncPersonsStatus", "leavePersonName", "leaveType", "leaveStart", "leaveEnd",
       "projectTitle", "defaultAssignDays", "dingAppKey", "dingAppSecret", "dingTestResult",
+      "identityBody", "refreshIdentityBtn",
       "themePrimary", "deptColorGrid", "statusColorGrid", "tripUpcomingColor", "tripActiveColor", "leaveActiveColor", "leaveUpcomingColor", "conflictColor",
       "easyaiAdminUsername", "easyaiAdminPassword", "easyaiAdminCredentialsStatus", "easyaiTestResult"
     ].forEach((id) => els[id] = document.getElementById(id));
@@ -71,6 +72,7 @@
     byId("resetConfigBtn").addEventListener("click", resetConfigDefaults);
     byId("testDingTalkBtn").addEventListener("click", testDingTalk);
     byId("testEasyAIKeyBtn").addEventListener("click", testEasyAIConnection);
+    els.refreshIdentityBtn.addEventListener("click", loadIdentities);
     byId("saveEasyAICredentialsBtn").addEventListener("click", saveEasyAICredentials);
     byId("editDingBtn").addEventListener("click", enableDingEdit);
     byId("saveDingBtn").addEventListener("click", saveDingConfig);
@@ -94,6 +96,33 @@
     renderProjects();
     renderPersons();
     renderLeaves();
+    loadIdentities();
+  }
+
+  async function loadIdentities() {
+    if (!els.identityBody) return;
+    try {
+      const rows = await fetchJson("api/project-sync/identities");
+      if (!rows.length) {
+        els.identityBody.innerHTML = `<tr><td colspan="5" class="table-empty">暂无身份记录。先执行项目同步预览或同步钉钉人员。</td></tr>`;
+        return;
+      }
+      els.identityBody.innerHTML = rows.map((row) => {
+        const id = row.dingtalk_user_id || row.dingtalk_union_id || row.dingtalk_open_id || "缺失";
+        const bound = row.easyai_user_id || "未绑定";
+        const status = row.name_changed ? "已绑定 · 昵称已变化" : (row.match_status || "unmatched");
+        const action = row.easyai_user_id ? `<button class="btn btn-sm" data-unbind-identity="${esc(row.dashboard_user_id)}">解除绑定</button>` : "待确认";
+        return `<tr><td>${esc(row.display_name || row.dashboard_user_id)}</td><td>${esc(id)}</td><td>${esc(bound)}</td><td>${esc(status)}</td><td>${action}</td></tr>`;
+      }).join("");
+      els.identityBody.querySelectorAll("[data-unbind-identity]").forEach((button) => button.addEventListener("click", async () => {
+        if (!confirm("解除该身份绑定？不会删除 wowidea 用户，也不会修改其组织。")) return;
+        const result = await fetchJson(`api/project-sync/identities/${encodeURIComponent(button.dataset.unbindIdentity)}/unbind`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) });
+        toast(result.success ? "身份绑定已解除" : (result.message || "解除失败"));
+        await loadIdentities();
+      }));
+    } catch (error) {
+      els.identityBody.innerHTML = `<tr><td colspan="5" class="table-empty">${esc(error.message || "读取失败")}</td></tr>`;
+    }
   }
 
   function applyThemeConfig() {

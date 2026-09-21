@@ -74,6 +74,19 @@
 
         <section class="card">
           <div class="card-head">
+            <h2 class="card-title"><span data-icon="users"></span>钉钉身份关联</h2>
+            <button class="btn btn-sm" id="refreshIdentityBtn" type="button"><span data-icon="refresh"></span>刷新</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Dashboard 用户</th><th>钉钉 ID</th><th>wowidea 用户 ID</th><th>状态</th><th>操作</th></tr></thead>
+              <tbody id="identityBody"><tr><td colspan="5" class="table-empty">读取中</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
             <h2 class="card-title"><span data-icon="calendar"></span>请假记录</h2>
             <span class="tag tag-primary" id="leaveRecordCount">0 条</span>
           </div>
