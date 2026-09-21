@@ -150,9 +150,10 @@
       try {
         const data = await fetchJson(`api/project-sync/${encodeURIComponent(project.id)}/status`);
         const binding = data.binding;
-        tag.textContent = binding?.status === "active" ? `${binding.organization_name} · 已绑定` : (binding?.status === "error" ? "同步错误" : "未绑定");
-        tag.className = `tag ${binding?.status === "active" ? "tag-primary" : binding?.status === "error" ? "tag-danger" : ""}`;
-        tag.title = binding?.last_error || binding?.easyai_org_id || "";
+        const simulated = data.simulated;
+        tag.textContent = binding?.status === "active" ? (simulated ? `${binding.organization_name} · 模拟模式，未写入 wowidea.top` : `${binding.organization_name} · 已绑定`) : (binding?.status === "error" ? "同步错误" : "未绑定");
+        tag.className = `tag ${binding?.status === "active" ? (simulated ? "tag-warning" : "tag-primary") : binding?.status === "error" ? "tag-danger" : ""}`;
+        tag.title = simulated ? "当前为模拟模式，组织 ID 仅存在于本地，未写入 wowidea.top" : (binding?.last_error || binding?.easyai_org_id || "");
       } catch {
         tag.textContent = "不可用";
       }
@@ -168,7 +169,7 @@
       const confirmed = confirm(`同步项目“${project.name}”？\n\n唯一 ID 匹配 ${preview.added || 0} 人，待确认 ${preview.unmatched || 0} 人，身份冲突 ${preview.conflict || 0} 人。\n\n只绑定已有平台账号并追加组织关系，不创建账号、不修改登录名、密码、历史数据或已有组织。\n\n本地默认使用 Mock 模式；真实 API 写入必须显式配置绑定接口。`);
       if (!confirmed) return;
       const result = await fetchJson(`api/project-sync/${encodeURIComponent(projectId)}/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trigger: "manual", operatorId: "local-admin" }) });
-      toast(result.success ? `同步完成：${result.added || 0} 人，未匹配 ${result.unmatched || 0} 人` : (result.message || "同步失败"));
+      toast(result.success ? (result.simulated ? `模拟同步完成：未写入 wowidea.top；${result.added || 0} 人，未匹配 ${result.unmatched || 0} 人` : `同步完成：${result.added || 0} 人，未匹配 ${result.unmatched || 0} 人`) : (result.message || "同步失败"));
       await loadProjectSyncStatuses();
     } catch (error) {
       toast(error.message || "同步失败");

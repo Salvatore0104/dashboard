@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env.local'), override=False)
 load_dotenv(override=False)
 
-from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, redact_error, SYNC_ENABLED, encrypt_secret, decrypt_secret, mask_secret, load_easyai_runtime_config, EasyAIClient
+from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, mask_secret, load_easyai_runtime_config, EasyAIClient
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
@@ -274,7 +274,7 @@ def project_sync_status(pid):
     binding = conn.execute('SELECT * FROM project_easyai_binding WHERE project_id=?', (pid,)).fetchone()
     runs = conn.execute('SELECT * FROM sync_run WHERE project_id=? ORDER BY started_at DESC LIMIT 10', (pid,)).fetchall()
     conn.close()
-    return jsonify({'binding': dict(binding) if binding else None, 'runs': [dict(row) for row in runs], 'enabled': SYNC_ENABLED})
+    return jsonify({'binding': dict(binding) if binding else None, 'runs': [dict(row) for row in runs], 'enabled': SYNC_ENABLED, 'provider': SYNC_MODE, 'simulated': SYNC_MODE != 'real', 'write_enabled': SYNC_ENABLED and SYNC_MODE == 'real'})
 
 
 @app.route('/api/project-sync/<pid>/preview', methods=['POST'])

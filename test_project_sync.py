@@ -5,7 +5,7 @@ import unittest
 os.environ.setdefault("EASYAI_SYNC_MODE", "mock")
 os.environ.setdefault("EASYAI_SYNC_ENABLED", "true")
 
-from project_sync import EasyAIClient, ensure_tables, match_identities, persist_identity_matches, normalize_name, redact_error, test_org_name
+from project_sync import EasyAIClient, ensure_tables, match_identities, persist_identity_matches, normalize_name, preview_project, redact_error, test_org_name
 
 
 class ProjectSyncUnitTests(unittest.TestCase):
@@ -13,6 +13,12 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.conn = sqlite3.connect(':memory:')
         self.conn.row_factory = sqlite3.Row
         ensure_tables(self.conn)
+        self.conn.executescript("""
+            CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL);
+            CREATE TABLE persons (id TEXT PRIMARY KEY, name TEXT NOT NULL, ding_id TEXT DEFAULT '', dingtalk_union_id TEXT DEFAULT '');
+            CREATE TABLE assignments (id TEXT PRIMARY KEY, person_id TEXT, project_id TEXT, start_date TEXT, end_date TEXT);
+            CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        """)
 
     def tearDown(self):
         self.conn.close()
@@ -64,6 +70,13 @@ class ProjectSyncUnitTests(unittest.TestCase):
         client._mock_orgs["parent-2"] = {"id": "parent-2", "name": "执行项目组"}
         with self.assertRaisesRegex(RuntimeError, "名称冲突"):
             client.find_parent_organization("执行项目组")
+
+    def test_preview_marks_mock_provider_as_simulated(self):
+        self.conn.execute("INSERT INTO projects (id, name, start_date, end_date) VALUES ('p1', '演示', '', '')")
+        result = preview_project(self.conn, "p1")
+        self.assertEqual(result["provider"], "mock")
+        self.assertTrue(result["simulated"])
+        self.assertFalse(result["write_enabled"])
 
 
 if __name__ == "__main__":

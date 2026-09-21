@@ -421,7 +421,7 @@ def preview_project(conn, project_id):
         users = [{"id": f"mock-user-{member['id']}", "name": member["name"], "dingtalk_user_id": member["ding_id"], "dingtalk_union_id": member["dingtalk_union_id"]} for member in members if member["ding_id"] or member["dingtalk_union_id"]]
     matches = match_identities(conn, members, users)
     counts = Counter(item["status"] for item in matches)
-    return {"project": dict(project), "binding": dict(binding) if binding else None, "members": matches, "added": counts["auto_matched"], "unmatched": counts["unmatched"], "conflict": counts["conflict"], "removed": 0, "read_only": True, "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
+    return {"project": dict(project), "binding": dict(binding) if binding else None, "members": matches, "added": counts["auto_matched"], "unmatched": counts["unmatched"], "conflict": counts["conflict"], "removed": 0, "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
 
 
 def sync_project(conn, project_id, trigger="manual", operator_id=""):
@@ -450,11 +450,11 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
         added = client.add_users_to_organization(matched_ids, binding["easyai_org_id"]) if SYNC_ENABLED else {"added": 0}
         unmatched = sum(item["status"] == "unmatched" for item in matches)
         conflicts = sum(item["status"] == "conflict" for item in matches)
-        details = {"members": matches, "provider": SYNC_MODE, "write_enabled": SYNC_ENABLED, "identity_bindings": identity_results, "provider_result": added, "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
+        details = {"members": matches, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "identity_bindings": identity_results, "provider_result": added, "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
         conn.execute("UPDATE sync_run SET status='succeeded', finished_at=?, added_count=?, unmatched_count=?, conflict_count=?, details=? WHERE id=?", (now_ms(), len(matched_ids), unmatched, conflicts, json.dumps(details, ensure_ascii=False), run_id))
         conn.execute("UPDATE project_easyai_binding SET last_sync_at=?, last_error='', updated_at=datetime('now') WHERE project_id=?", (now_ms(), project_id))
         conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, affected_user_ids, result, created_at) VALUES (?, ?, ?, 'project_sync', ?, ?, 'succeeded', ?)", (str(uuid.uuid4()), operator_id, project_id, binding["easyai_org_id"], json.dumps(matched_ids), now_ms()))
-        return {"success": True, "run_id": run_id, "added": len(matched_ids), "unmatched": unmatched, "conflict": conflicts, "details": details}
+        return {"success": True, "run_id": run_id, "added": len(matched_ids), "unmatched": unmatched, "conflict": conflicts, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "details": details}
     except Exception as exc:
         message = redact_error(exc)
         conn.execute("UPDATE sync_run SET status='failed', finished_at=?, error_count=1, details=? WHERE id=?", (now_ms(), json.dumps({"error": message}, ensure_ascii=False), run_id))
