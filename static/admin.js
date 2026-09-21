@@ -45,7 +45,7 @@
       "syncPersonsList", "syncPersonsStatus", "leavePersonName", "leaveType", "leaveStart", "leaveEnd",
       "projectTitle", "defaultAssignDays", "dingAppKey", "dingAppSecret", "dingTestResult",
       "themePrimary", "deptColorGrid", "statusColorGrid", "tripUpcomingColor", "tripActiveColor", "leaveActiveColor", "leaveUpcomingColor", "conflictColor",
-      "easyaiAdminBaseUrl", "easyaiAdminApiKeyHeader", "easyaiAdminKey", "easyaiAdminKeyStatus", "easyaiTestResult"
+      "easyaiAdminUsername", "easyaiAdminPassword", "easyaiAdminCredentialsStatus", "easyaiTestResult"
     ].forEach((id) => els[id] = document.getElementById(id));
   }
 
@@ -71,6 +71,7 @@
     byId("resetConfigBtn").addEventListener("click", resetConfigDefaults);
     byId("testDingTalkBtn").addEventListener("click", testDingTalk);
     byId("testEasyAIKeyBtn").addEventListener("click", testEasyAIConnection);
+    byId("saveEasyAICredentialsBtn").addEventListener("click", saveEasyAICredentials);
     byId("editDingBtn").addEventListener("click", enableDingEdit);
     byId("saveDingBtn").addEventListener("click", saveDingConfig);
     els.projectBusinessTrip.addEventListener("change", () => renderBusinessTripPersonPicker(currentTripProject()));
@@ -150,9 +151,10 @@
       try {
         const data = await fetchJson(`api/project-sync/${encodeURIComponent(project.id)}/status`);
         const binding = data.binding;
-        tag.textContent = binding?.status === "active" ? `${binding.organization_name} · 已绑定` : (binding?.status === "error" ? "同步错误" : "未绑定");
-        tag.className = `tag ${binding?.status === "active" ? "tag-primary" : binding?.status === "error" ? "tag-danger" : ""}`;
-        tag.title = binding?.last_error || binding?.easyai_org_id || "";
+        const simulated = data.simulated;
+        tag.textContent = binding?.status === "active" ? (simulated ? `${binding.organization_name} · 模拟模式，未写入 wowidea.top` : `${binding.organization_name} · 已绑定`) : (binding?.status === "error" ? "同步错误" : "未绑定");
+        tag.className = `tag ${binding?.status === "active" ? (simulated ? "tag-warning" : "tag-primary") : binding?.status === "error" ? "tag-danger" : ""}`;
+        tag.title = simulated ? "当前为模拟模式，组织 ID 仅存在于本地，未写入 wowidea.top" : (binding?.last_error || binding?.easyai_org_id || "");
       } catch {
         tag.textContent = "不可用";
       }
@@ -168,7 +170,7 @@
       const confirmed = confirm(`同步项目“${project.name}”？\n\n唯一 ID 匹配 ${preview.added || 0} 人，待确认 ${preview.unmatched || 0} 人，身份冲突 ${preview.conflict || 0} 人。\n\n只绑定已有平台账号并追加组织关系，不创建账号、不修改登录名、密码、历史数据或已有组织。\n\n本地默认使用 Mock 模式；真实 API 写入必须显式配置绑定接口。`);
       if (!confirmed) return;
       const result = await fetchJson(`api/project-sync/${encodeURIComponent(projectId)}/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trigger: "manual", operatorId: "local-admin" }) });
-      toast(result.success ? `同步完成：${result.added || 0} 人，未匹配 ${result.unmatched || 0} 人` : (result.message || "同步失败"));
+      toast(result.success ? (result.simulated ? `模拟同步完成：未写入 wowidea.top；${result.added || 0} 人，未匹配 ${result.unmatched || 0} 人` : `同步完成：${result.added || 0} 人，未匹配 ${result.unmatched || 0} 人`) : (result.message || "同步失败"));
       await loadProjectSyncStatuses();
     } catch (error) {
       toast(error.message || "同步失败");
@@ -438,12 +440,11 @@
     els.leaveActiveColor.value = state.config.leave_active_color || "#dc2626";
     els.leaveUpcomingColor.value = state.config.leave_upcoming_color || "#2563eb";
     els.conflictColor.value = state.config.conflict_color || "#dc2626";
-    els.easyaiAdminBaseUrl.value = state.config.easyai_admin_base_url || "https://ai.wowidea.top/api";
-    els.easyaiAdminApiKeyHeader.value = state.config.easyai_admin_api_key_header || "X-Admin-Access-Key";
-    els.easyaiAdminKey.value = "";
-    els.easyaiAdminKey.placeholder = state.config.easyai_admin_api_key_masked ? `已配置 ${state.config.easyai_admin_api_key_masked}，留空保持不变` : "请输入管理员 Key";
-    els.easyaiAdminKeyStatus.textContent = state.config.easyai_admin_api_key_configured ? `已配置 ${state.config.easyai_admin_api_key_masked || ""}` : "未配置";
-    els.easyaiAdminKeyStatus.className = `tag ${state.config.easyai_admin_api_key_configured ? "tag-primary" : ""}`;
+    els.easyaiAdminUsername.value = state.config.easyai_admin_username || "";
+    els.easyaiAdminPassword.value = "";
+    const credentialsConfigured = !!state.config.easyai_admin_credentials_configured;
+    els.easyaiAdminCredentialsStatus.textContent = credentialsConfigured ? "已配置" : "未配置";
+    els.easyaiAdminCredentialsStatus.className = `tag ${credentialsConfigured ? "tag-primary" : ""}`;
     els.easyaiTestResult.style.display = "none";
     els.dingTestResult.style.display = "none";
 
@@ -581,26 +582,44 @@
       conflict_color: els.conflictColor.value,
       conflict_opacity: state.config.conflict_opacity || "30"
     };
-    body.easyai_admin_base_url = els.easyaiAdminBaseUrl.value.trim() || "https://ai.wowidea.top/api";
-    body.easyai_admin_api_key_header = els.easyaiAdminApiKeyHeader.value.trim() || "X-Admin-Access-Key";
-    if (els.easyaiAdminKey.value.trim()) body.easyai_admin_api_key = els.easyaiAdminKey.value.trim();
     // 收集动态部门颜色
     els.deptColorGrid.querySelectorAll(".dept-color-input").forEach(input => {
       body[input.dataset.key] = input.value;
     });
     const response = await fetch("api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!response.ok) return toast("配置保存失败");
-    window.ThemeStore?.save({ ...state.config, ...body });
+    const safeBody = { ...body };
+    window.ThemeStore?.save({ ...state.config, ...safeBody });
     closeModal("configModal");
     await loadAll();
     toast("配置已保存");
+  }
+
+  async function saveEasyAICredentials() {
+    const username = els.easyaiAdminUsername.value.trim();
+    const password = els.easyaiAdminPassword.value;
+    if (!username || !password) return toast("请填写管理员账号和密码");
+    const body = { easyai_admin_username: username, easyai_admin_password: password };
+    try {
+      const response = await fetch("api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (!response.ok) throw new Error("保存失败");
+      await loadAll();
+      els.easyaiAdminPassword.value = "";
+      toast("管理员账号已保存");
+    } catch (error) {
+      toast(error.message || "管理员账号保存失败");
+    }
   }
 
   async function testEasyAIConnection() {
     els.easyaiTestResult.style.display = "inline-flex";
     els.easyaiTestResult.textContent = "正在测试...";
     try {
-      const data = await fetchJson("api/easyai/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiKey: els.easyaiAdminKey.value.trim() }) });
+      const data = await fetchJson("api/easyai/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
       els.easyaiTestResult.textContent = data.message || (data.success ? "连接成功" : "连接失败");
       els.easyaiTestResult.className = `tag ${data.success ? "tag-primary" : "tag-danger"}`;
     } catch (error) {

@@ -19,14 +19,13 @@ TEST_PREFIX = os.getenv("EASYAI_TEST_ORG_PREFIX", "[TEST][dashboard-local]").str
 SYNC_MODE = os.getenv("EASYAI_SYNC_MODE", "mock").strip().lower()
 SYNC_ENABLED = os.getenv("EASYAI_SYNC_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 PARENT_ORG_NAME = os.getenv("EASYAI_PARENT_ORG_NAME", "执行项目组").strip()
-EASYAI_BASE_URL = os.getenv("EASYAI_ADMIN_BASE_URL", "https://ai.wowidea.top").rstrip("/")
-EASYAI_KEY_HEADER = os.getenv("EASYAI_ADMIN_API_KEY_HEADER", "X-Admin-Access-Key").strip()
+EASYAI_BASE_URL = "https://wowidea.top/api"
 
 
 def normalize_base_url(value):
     base = str(value or "").strip().rstrip("/")
     if not base:
-        return "https://ai.wowidea.top/api"
+        return "https://wowidea.top/api"
     return base if base.endswith("/api") else f"{base}/api"
 
 
@@ -40,7 +39,8 @@ def _cipher():
         return Fernet(configured.encode("utf-8"))
     path = _config_key_path()
     if os.path.exists(path):
-        key = open(path, "rb").read().strip()
+        with open(path, "rb") as handle:
+            key = handle.read().strip()
     else:
         key = Fernet.generate_key()
         with open(path, "wb") as handle:
@@ -60,7 +60,7 @@ def decrypt_secret(value):
     try:
         return _cipher().decrypt(str(value).encode("ascii")).decode("utf-8")
     except (InvalidToken, ValueError, UnicodeError):
-        raise RuntimeError("wowidea 管理 Key 解密失败，请检查 EASYAI_CONFIG_ENCRYPTION_KEY")
+        raise RuntimeError("wowidea 管理凭据解密失败，请检查 EASYAI_CONFIG_ENCRYPTION_KEY")
 
 
 def mask_secret(value):
@@ -71,14 +71,34 @@ def mask_secret(value):
 def load_easyai_runtime_config(conn=None):
     config = {}
     if conn is not None:
-        rows = conn.execute("SELECT key, value FROM config WHERE key IN ('easyai_admin_base_url', 'easyai_admin_api_key_header', 'easyai_admin_api_key_encrypted')").fetchall()
+        rows = conn.execute("SELECT key, value FROM config WHERE key IN ('easyai_admin_bearer_token_encrypted', 'easyai_admin_username_encrypted', 'easyai_admin_password_encrypted')").fetchall()
         config.update({row["key"]: row["value"] for row in rows})
-    encrypted = config.get("easyai_admin_api_key_encrypted", "")
+    encrypted = config.get("easyai_admin_bearer_token_encrypted", "")
+    encrypted_username = config.get("easyai_admin_username_encrypted", "")
+    encrypted_password = config.get("easyai_admin_password_encrypted", "")
+    try:
+        token = decrypt_secret(encrypted) if encrypted else os.getenv("EASYAI_ADMIN_BEARER_TOKEN", "")
+        username = decrypt_secret(encrypted_username) if encrypted_username else os.getenv("EASYAI_ADMIN_USERNAME", "")
+        password = decrypt_secret(encrypted_password) if encrypted_password else os.getenv("EASYAI_ADMIN_PASSWORD", "")
+    except RuntimeError:
+        token = ""
+        username = ""
+        password = ""
+    if username and password:
+        token = ""
     return {
-        "base_url": normalize_base_url(config.get("easyai_admin_base_url") or os.getenv("EASYAI_ADMIN_BASE_URL", "https://ai.wowidea.top")),
-        "key_header": config.get("easyai_admin_api_key_header") or os.getenv("EASYAI_ADMIN_API_KEY_HEADER", "X-Admin-Access-Key"),
-        "api_key": decrypt_secret(encrypted) if encrypted else os.getenv("EASYAI_ADMIN_API_KEY", ""),
+        "base_url": EASYAI_BASE_URL,
+        "bearer_token": normalize_bearer_token(token),
+        "username": username.strip(),
+        "password": password,
     }
+
+
+def normalize_bearer_token(value):
+    token = str(value or "").strip()
+    if not token:
+        return ""
+    return token if token.lower().startswith("bearer ") else f"Bearer {token}"
 
 
 def now_ms():
@@ -107,15 +127,38 @@ class EasyAIClient:
         self.mode = SYNC_MODE
         runtime_config = runtime_config or {}
         self.base_url = normalize_base_url(runtime_config.get("base_url") or EASYAI_BASE_URL)
-        self.key_header = str(runtime_config.get("key_header") or EASYAI_KEY_HEADER).strip()
-        self.api_key = str(runtime_config.get("api_key") or os.getenv("EASYAI_ADMIN_API_KEY", "")).strip()
+        self.bearer_token = normalize_bearer_token(runtime_config.get("bearer_token"))
+        self.username = str(runtime_config.get("username") or "").strip()
+        self.password = str(runtime_config.get("password") or "")
+        self.refresh_token = str(runtime_config.get("refresh_token") or "")
         self._mock_users = {}
         self._mock_orgs = {}
 
     def _headers(self):
-        if not self.api_key:
-            raise RuntimeError("EASYAI_ADMIN_API_KEY 未配置")
-        return {self.key_header: self.api_key, "Content-Type": "application/json"}
+        self._ensure_authenticated()
+        return {"Authorization": self.bearer_token, "Content-Type": "application/json"}
+
+    def _ensure_authenticated(self):
+        if self.bearer_token:
+            return
+        if not self.username or not self.password:
+            raise RuntimeError("尚未配置 wowidea 管理员账号和密码")
+        payloads = ({"username": self.username, "password": self.password}, {"account": self.username, "password": self.password})
+        last_error = None
+        for payload in payloads:
+            response = requests.post(f"{self.base_url}/users/loginByUsername", json=payload, timeout=15)
+            if response.ok:
+                data = response.json() if response.content else {}
+                body = data.get("data", data) if isinstance(data, dict) else {}
+                token = body.get("accessToken") or body.get("access_token") or body.get("token")
+                if token:
+                    self.bearer_token = normalize_bearer_token(token)
+                    self.refresh_token = body.get("refreshToken") or body.get("refresh_token") or ""
+                    return
+                last_error = "登录响应缺少 access token"
+            else:
+                last_error = f"EasyAI 登录 API {response.status_code}"
+        raise RuntimeError(last_error or "wowidea 管理员登录失败")
 
     def _request(self, method, path, **kwargs):
         response = requests.request(method, f"{self.base_url}{path}", headers=self._headers(), timeout=15, **kwargs)
@@ -136,14 +179,19 @@ class EasyAIClient:
 
     def find_parent_organization(self, name):
         orgs = self.list_organizations()
-        for org in orgs:
-            if str(org.get("name", org.get("org_name", ""))).strip() == name:
-                return org
-        if self.mode == "mock":
-            parent = {"id": "mock-parent-execution-project", "name": name}
-            self._mock_orgs["__parent__"] = parent
-            return parent
-        raise RuntimeError(f"未找到父组织：{name}")
+        matches = [
+            org for org in orgs
+            if str(org.get("name", org.get("org_name", ""))).strip() == name
+        ]
+        if not matches:
+            raise RuntimeError(f"未找到父组织：{name}")
+        if len(matches) > 1:
+            raise RuntimeError(f"父组织名称冲突：{name}（找到 {len(matches)} 个）")
+        parent = matches[0]
+        parent_id = parent.get("id", parent.get("org_id", ""))
+        if not parent_id:
+            raise RuntimeError(f"父组织缺少 ID：{name}")
+        return parent
 
     def create_organization(self, name, parent_id, external_id):
         if self.mode == "mock":
@@ -156,6 +204,18 @@ class EasyAIClient:
         payload = {"name": name, "parent_id": parent_id, "description": f"dashboard project {external_id}", "external_id": str(external_id)}
         data = self._request("POST", "/organization", json=payload)
         return data.get("data", data)
+
+    def update_organization_name(self, org_id, name):
+        if not org_id:
+            raise RuntimeError("组织更新缺少组织 ID")
+        if self.mode == "mock":
+            for org in self._mock_orgs.values():
+                if str(org.get("id")) == str(org_id):
+                    org["name"] = name
+                    return org
+            raise RuntimeError(f"未找到组织：{org_id}")
+        data = self._request("PUT", f"/organization/{org_id}", json={"name": name})
+        return data.get("data", data) if isinstance(data, dict) else data
 
     def list_users(self):
         if self.mode == "mock":
@@ -359,6 +419,39 @@ def ensure_binding(conn, project_id, project_name):
         raise
 
 
+def update_project_binding_name(conn, project_id, project_name):
+    """Keep an existing project organization name aligned with the project."""
+    binding = conn.execute(
+        "SELECT * FROM project_easyai_binding WHERE project_id=?", (project_id,)
+    ).fetchone()
+    if not binding or not binding["easyai_org_id"]:
+        return None
+    organization_name = test_org_name(project_name)
+    if binding["organization_name"] == organization_name:
+        return dict(binding)
+    if not SYNC_ENABLED:
+        conn.execute(
+            "UPDATE project_easyai_binding SET organization_name=?, updated_at=datetime('now') WHERE project_id=?",
+            (organization_name, project_id),
+        )
+        return dict(conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project_id,)).fetchone())
+    client = EasyAIClient(load_easyai_runtime_config(conn))
+    try:
+        client.update_organization_name(binding["easyai_org_id"], organization_name)
+        conn.execute(
+            "UPDATE project_easyai_binding SET organization_name=?, last_error='', updated_at=datetime('now') WHERE project_id=?",
+            (organization_name, project_id),
+        )
+        return dict(conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project_id,)).fetchone())
+    except Exception as exc:
+        message = redact_error(exc)
+        conn.execute(
+            "UPDATE project_easyai_binding SET status='error', last_error=?, updated_at=datetime('now') WHERE project_id=?",
+            (message, project_id),
+        )
+        raise
+
+
 def preview_project(conn, project_id):
     project = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
     if not project:
@@ -371,7 +464,7 @@ def preview_project(conn, project_id):
         users = [{"id": f"mock-user-{member['id']}", "name": member["name"], "dingtalk_user_id": member["ding_id"], "dingtalk_union_id": member["dingtalk_union_id"]} for member in members if member["ding_id"] or member["dingtalk_union_id"]]
     matches = match_identities(conn, members, users)
     counts = Counter(item["status"] for item in matches)
-    return {"project": dict(project), "binding": dict(binding) if binding else None, "members": matches, "added": counts["auto_matched"], "unmatched": counts["unmatched"], "conflict": counts["conflict"], "removed": 0, "read_only": True, "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
+    return {"project": dict(project), "binding": dict(binding) if binding else None, "members": matches, "added": counts["auto_matched"], "unmatched": counts["unmatched"], "conflict": counts["conflict"], "removed": 0, "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
 
 
 def sync_project(conn, project_id, trigger="manual", operator_id=""):
@@ -400,11 +493,11 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
         added = client.add_users_to_organization(matched_ids, binding["easyai_org_id"]) if SYNC_ENABLED else {"added": 0}
         unmatched = sum(item["status"] == "unmatched" for item in matches)
         conflicts = sum(item["status"] == "conflict" for item in matches)
-        details = {"members": matches, "provider": SYNC_MODE, "write_enabled": SYNC_ENABLED, "identity_bindings": identity_results, "provider_result": added, "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
+        details = {"members": matches, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "identity_bindings": identity_results, "provider_result": added, "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
         conn.execute("UPDATE sync_run SET status='succeeded', finished_at=?, added_count=?, unmatched_count=?, conflict_count=?, details=? WHERE id=?", (now_ms(), len(matched_ids), unmatched, conflicts, json.dumps(details, ensure_ascii=False), run_id))
         conn.execute("UPDATE project_easyai_binding SET last_sync_at=?, last_error='', updated_at=datetime('now') WHERE project_id=?", (now_ms(), project_id))
         conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, affected_user_ids, result, created_at) VALUES (?, ?, ?, 'project_sync', ?, ?, 'succeeded', ?)", (str(uuid.uuid4()), operator_id, project_id, binding["easyai_org_id"], json.dumps(matched_ids), now_ms()))
-        return {"success": True, "run_id": run_id, "added": len(matched_ids), "unmatched": unmatched, "conflict": conflicts, "details": details}
+        return {"success": True, "run_id": run_id, "added": len(matched_ids), "unmatched": unmatched, "conflict": conflicts, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "details": details}
     except Exception as exc:
         message = redact_error(exc)
         conn.execute("UPDATE sync_run SET status='failed', finished_at=?, error_count=1, details=? WHERE id=?", (now_ms(), json.dumps({"error": message}, ensure_ascii=False), run_id))

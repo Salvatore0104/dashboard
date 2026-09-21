@@ -1,11 +1,14 @@
 import os
 import sqlite3
 import unittest
+from unittest.mock import patch
+from pathlib import Path
+
 
 os.environ.setdefault("EASYAI_SYNC_MODE", "mock")
 os.environ.setdefault("EASYAI_SYNC_ENABLED", "true")
 
-from project_sync import ensure_tables, match_identities, persist_identity_matches, normalize_name, redact_error, test_org_name
+from project_sync import EasyAIClient, encrypt_secret, ensure_tables, load_easyai_runtime_config, match_identities, persist_identity_matches, normalize_name, preview_project, redact_error, test_org_name
 
 
 class ProjectSyncUnitTests(unittest.TestCase):
@@ -13,6 +16,12 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.conn = sqlite3.connect(':memory:')
         self.conn.row_factory = sqlite3.Row
         ensure_tables(self.conn)
+        self.conn.executescript("""
+            CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL);
+            CREATE TABLE persons (id TEXT PRIMARY KEY, name TEXT NOT NULL, ding_id TEXT DEFAULT '', dingtalk_union_id TEXT DEFAULT '');
+            CREATE TABLE assignments (id TEXT PRIMARY KEY, person_id TEXT, project_id TEXT, start_date TEXT, end_date TEXT);
+            CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        """)
 
     def tearDown(self):
         self.conn.close()
@@ -54,6 +63,68 @@ class ProjectSyncUnitTests(unittest.TestCase):
         persist_identity_matches(self.conn, matches[:1])
         with self.assertRaises(sqlite3.IntegrityError):
             persist_identity_matches(self.conn, matches[1:])
+
+    def test_parent_lookup_requires_exactly_one_existing_parent(self):
+        client = EasyAIClient()
+        with self.assertRaisesRegex(RuntimeError, "未找到父组织"):
+            client.find_parent_organization("执行项目组")
+        client._mock_orgs["parent-1"] = {"id": "parent-1", "name": "执行项目组"}
+        self.assertEqual(client.find_parent_organization("执行项目组")["id"], "parent-1")
+        client._mock_orgs["parent-2"] = {"id": "parent-2", "name": "执行项目组"}
+        with self.assertRaisesRegex(RuntimeError, "名称冲突"):
+            client.find_parent_organization("执行项目组")
+
+    def test_preview_marks_mock_provider_as_simulated(self):
+        self.conn.execute("INSERT INTO projects (id, name, start_date, end_date) VALUES ('p1', '演示', '', '')")
+        result = preview_project(self.conn, "p1")
+        self.assertEqual(result["provider"], "mock")
+        self.assertTrue(result["simulated"])
+        self.assertFalse(result["write_enabled"])
+
+    def test_bearer_token_is_loaded_from_encrypted_config(self):
+        self.conn.execute("INSERT INTO config (key, value) VALUES (?, ?)", ("easyai_admin_bearer_token_encrypted", encrypt_secret("jwt-value")))
+        runtime = load_easyai_runtime_config(self.conn)
+        self.assertEqual(runtime["bearer_token"], "Bearer jwt-value")
+        stored = self.conn.execute("SELECT value FROM config WHERE key='easyai_admin_bearer_token_encrypted'").fetchone()[0]
+        self.assertNotIn("jwt-value", stored)
+
+    def test_bearer_token_mask_only_exposes_last_four(self):
+        from project_sync import mask_secret
+        masked = mask_secret("Bearer abcdefghijkl2moA")
+        self.assertTrue(masked.endswith("2moA"))
+        self.assertNotIn("Bearer", masked)
+
+    def test_invalid_bearer_ciphertext_is_ignored(self):
+        self.conn.execute("INSERT INTO config (key, value) VALUES (?, ?)", ("easyai_admin_bearer_token_encrypted", "invalid-old-ciphertext"))
+        runtime = load_easyai_runtime_config(self.conn)
+        self.assertEqual(runtime["bearer_token"], "")
+
+    def test_admin_api_endpoint_is_fixed(self):
+        self.conn.executemany(
+            "INSERT INTO config (key, value) VALUES (?, ?)",
+            [("easyai_admin_base_url", "https://example.invalid/api"), ("easyai_auth_path", "/wrong")],
+        )
+        runtime = load_easyai_runtime_config(self.conn)
+        self.assertEqual(runtime["base_url"], "https://wowidea.top/api")
+        self.assertEqual(runtime["base_url"], "https://wowidea.top/api")
+
+    def test_bearer_header_preserves_or_adds_prefix(self):
+        self.assertEqual(EasyAIClient({"bearer_token": "jwt-value"})._headers()["Authorization"], "Bearer jwt-value")
+        self.assertEqual(EasyAIClient({"bearer_token": "Bearer jwt-value"})._headers()["Authorization"], "Bearer jwt-value")
+
+    def test_admin_page_has_independent_login_save_control(self):
+        html = Path(__file__).with_name("static").joinpath("admin.html").read_text(encoding="utf-8")
+        js = Path(__file__).with_name("static").joinpath("admin.js").read_text(encoding="utf-8")
+        self.assertIn('id="saveEasyAICredentialsBtn"', html)
+        self.assertIn("保存管理员账号", html)
+        self.assertIn("async function saveEasyAICredentials", js)
+        self.assertIn('body = { easyai_admin_username: username, easyai_admin_password: password }', js)
+        self.assertIn('state.config.easyai_admin_credentials_configured', js)
+
+    def test_password_mask_is_not_exposed_by_config_response_code(self):
+        app_source = Path(__file__).with_name("app.py").read_text(encoding="utf-8")
+        self.assertNotIn("result['easyai_admin_password_masked']", app_source)
+        self.assertIn("JWT 已过期或无效", app_source)
 
 
 if __name__ == "__main__":

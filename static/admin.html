@@ -216,19 +216,20 @@
         </section>
         <section class="settings-section">
           <h3>wowidea.top 项目组织同步</h3>
-          <div class="field"><label>管理 API 地址</label><input class="input" id="easyaiAdminBaseUrl" type="url" placeholder="https://ai.wowidea.top/api"></div>
-          <div class="field"><label>认证请求头</label><input class="input" id="easyaiAdminApiKeyHeader" type="text" placeholder="X-Admin-Access-Key"></div>
-          <div class="field"><label>管理员 Key</label>
-            <div class="input-row">
-              <input class="input" id="easyaiAdminKey" type="password" autocomplete="new-password" placeholder="留空表示保持现有 Key">
-              <span class="tag" id="easyaiAdminKeyStatus">未配置</span>
-            </div>
+          <div class="field"><label>wowidea.top 管理员账号</label>
+            <div class="input-row"><input class="input" id="easyaiAdminUsername" type="text" autocomplete="username" placeholder="输入管理员账号"><span class="tag" id="easyaiAdminCredentialsStatus">未配置</span></div>
+          </div>
+          <div class="field"><label>wowidea.top 管理员密码</label>
+            <div class="input-row"><input class="input" id="easyaiAdminPassword" type="password" autocomplete="current-password" placeholder="输入管理员密码"></div>
+          </div>
+          <div class="inline-actions">
+            <button class="btn btn-primary" id="saveEasyAICredentialsBtn" type="button"><span data-icon="save"></span>保存管理员账号</button>
           </div>
           <div class="inline-actions">
             <button class="btn btn-success" id="testEasyAIKeyBtn" type="button"><span data-icon="refresh"></span>测试 wowidea 连接</button>
             <span class="tag" id="easyaiTestResult" style="display:none"></span>
           </div>
-          <small class="muted">Key 只提交给本地后端保存，页面不会回显完整值。</small>
+          <div class="muted">账号和密码只提交给本地后端加密保存，页面不会回显密码或 JWT。</div>
         </section>
         <section class="settings-section">
           <h3>部门颜色</h3>
@@ -254,7 +255,7 @@
   </div>
 
   <div class="toast" id="toast" style="display:none"></div>
-  <script src="admin.js?v=20260608-trip1"></script>
+  <script src="admin.js?v=20260921-auth1"></script>
   <script>AdminApp.init();</script>
 </body>
 </html>
