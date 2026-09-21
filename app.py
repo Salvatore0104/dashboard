@@ -537,6 +537,7 @@ def get_config():
         conn.commit()
         conn.close()
     result['easyai_admin_bearer_token_configured'] = bool(configured_key)
+    result['easyai_admin_bearer_token_masked'] = mask_secret(configured_key)
     return jsonify(result)
 
 @app.route('/api/config', methods=['POST'])
@@ -577,7 +578,10 @@ def test_easyai_connection():
         organizations = client.list_organizations()
         return jsonify({'success': True, 'message': f'连接成功，读取到 {len(organizations)} 个组织'})
     except Exception as exc:
-        return jsonify({'success': False, 'message': redact_error(exc)}), 400
+        message = redact_error(exc)
+        if 'EasyAI API 401' in message or 'EasyAI API 403' in message:
+            message = 'JWT 已过期或无效'
+        return jsonify({'success': False, 'message': message}), 400
     finally:
         conn.close()
 

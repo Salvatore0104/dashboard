@@ -88,6 +88,12 @@ class ProjectSyncUnitTests(unittest.TestCase):
         stored = self.conn.execute("SELECT value FROM config WHERE key='easyai_admin_bearer_token_encrypted'").fetchone()[0]
         self.assertNotIn("jwt-value", stored)
 
+    def test_bearer_token_mask_only_exposes_last_four(self):
+        from project_sync import mask_secret
+        masked = mask_secret("Bearer abcdefghijkl2moA")
+        self.assertTrue(masked.endswith("2moA"))
+        self.assertNotIn("Bearer", masked)
+
     def test_invalid_bearer_ciphertext_is_ignored(self):
         self.conn.execute("INSERT INTO config (key, value) VALUES (?, ?)", ("easyai_admin_bearer_token_encrypted", "invalid-old-ciphertext"))
         runtime = load_easyai_runtime_config(self.conn)
@@ -113,10 +119,12 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.assertIn("保存管理员 Bearer JWT", html)
         self.assertIn("async function saveEasyAIBearerConfig", js)
         self.assertIn('body = { easyai_admin_bearer_token: token }', js)
+        self.assertIn('state.config.easyai_admin_bearer_token_masked', js)
 
     def test_password_mask_is_not_exposed_by_config_response_code(self):
         app_source = Path(__file__).with_name("app.py").read_text(encoding="utf-8")
         self.assertNotIn("result['easyai_admin_password_masked']", app_source)
+        self.assertIn("JWT 已过期或无效", app_source)
 
 
 if __name__ == "__main__":

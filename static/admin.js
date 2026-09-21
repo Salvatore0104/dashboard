@@ -441,8 +441,8 @@
     els.leaveUpcomingColor.value = state.config.leave_upcoming_color || "#2563eb";
     els.conflictColor.value = state.config.conflict_color || "#dc2626";
     els.easyaiAdminBearerToken.value = "";
-    els.easyaiAdminBearerToken.placeholder = state.config.easyai_admin_bearer_token_configured ? "已配置，留空保持不变" : "粘贴 JWT 或 Bearer JWT";
-    els.easyaiAdminBearerStatus.textContent = state.config.easyai_admin_bearer_token_configured ? "已配置" : "未配置";
+    els.easyaiAdminBearerToken.placeholder = state.config.easyai_admin_bearer_token_configured ? `已配置 ${state.config.easyai_admin_bearer_token_masked || ""}，留空保持不变` : "粘贴 JWT 或 Bearer JWT";
+    els.easyaiAdminBearerStatus.textContent = state.config.easyai_admin_bearer_token_configured ? `已配置 ${state.config.easyai_admin_bearer_token_masked || ""}` : "未配置";
     els.easyaiAdminBearerStatus.className = `tag ${state.config.easyai_admin_bearer_token_configured ? "tag-primary" : ""}`;
     els.easyaiTestResult.style.display = "none";
     els.dingTestResult.style.display = "none";
