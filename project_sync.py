@@ -122,6 +122,25 @@ def redact_error(error):
     return text[:500]
 
 
+def organization_id(org):
+    """Read organization IDs from both Mongo-style and legacy responses."""
+    if not isinstance(org, dict):
+        return ""
+    return str(org.get("_id") or org.get("id") or org.get("org_id") or "").strip()
+
+
+def iter_organizations(value):
+    """Flatten the nested organization tree without losing child nodes."""
+    if isinstance(value, dict):
+        children = value.get("children") or []
+        yield value
+        for child in children:
+            yield from iter_organizations(child)
+    elif isinstance(value, list):
+        for item in value:
+            yield from iter_organizations(item)
+
+
 class EasyAIClient:
     def __init__(self, runtime_config=None):
         self.mode = SYNC_MODE
@@ -175,10 +194,14 @@ class EasyAIClient:
         if self.mode == "mock":
             return list(self._mock_orgs.values())
         data = self._request("GET", "/organization")
-        return data if isinstance(data, list) else data.get("data", data.get("organizations", []))
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return data.get("data", data.get("organizations", []))
+        return []
 
     def find_parent_organization(self, name):
-        orgs = self.list_organizations()
+        orgs = list(iter_organizations(self.list_organizations()))
         matches = [
             org for org in orgs
             if str(org.get("name", org.get("org_name", ""))).strip() == name
@@ -188,22 +211,44 @@ class EasyAIClient:
         if len(matches) > 1:
             raise RuntimeError(f"父组织名称冲突：{name}（找到 {len(matches)} 个）")
         parent = matches[0]
-        parent_id = parent.get("id", parent.get("org_id", ""))
+        parent_id = organization_id(parent)
         if not parent_id:
             raise RuntimeError(f"父组织缺少 ID：{name}")
         return parent
+
+    def find_organizations_by_name(self, name):
+        return [org for org in iter_organizations(self.list_organizations()) if str(org.get("name", "")).strip() == str(name).strip()]
 
     def create_organization(self, name, parent_id, external_id):
         if self.mode == "mock":
             key = str(external_id)
             if key in self._mock_orgs:
                 return self._mock_orgs[key]
-            org = {"id": f"mock-org-{hashlib.sha1(key.encode()).hexdigest()[:12]}", "name": name, "parent_id": parent_id, "external_id": key}
+            org = {"_id": f"mock-org-{hashlib.sha1(key.encode()).hexdigest()[:12]}", "name": name, "parent": parent_id, "external_id": key}
             self._mock_orgs[key] = org
             return org
-        payload = {"name": name, "parent_id": parent_id, "description": f"dashboard project {external_id}", "external_id": str(external_id)}
-        data = self._request("POST", "/organization", json=payload)
-        return data.get("data", data)
+        # The deployed OpenAPI DTO uses `parent` and returns Mongo-style `_id`.
+        # Keep the request limited to documented fields; external_id is local.
+        payload = {"name": name, "parent": str(parent_id), "description": f"dashboard project {external_id}"}
+        data = self._request("POST", "/v1/openapi/organization", json=payload)
+        if isinstance(data, dict):
+            body = data.get("data", data)
+            if isinstance(body, dict):
+                return body
+        raise RuntimeError("组织创建响应格式无效")
+
+    def move_organization(self, org_id, parent_id):
+        if not org_id or not parent_id:
+            raise RuntimeError("组织移动缺少组织 ID 或父组织 ID")
+        if self.mode == "mock":
+            for org in self._mock_orgs.values():
+                if organization_id(org) == str(org_id):
+                    org["parent"] = str(parent_id)
+                    return org
+            raise RuntimeError(f"未找到组织：{org_id}")
+        data = self._request("PATCH", f"/v1/openapi/organization/{org_id}", json={"parent": str(parent_id)})
+        body = data.get("data", data) if isinstance(data, dict) else data
+        return body if isinstance(body, dict) else {}
 
     def update_organization_name(self, org_id, name):
         if not org_id:
@@ -421,10 +466,16 @@ def ensure_binding(conn, project_id, project_name):
         return dict(existing) if existing else None
     client = EasyAIClient(load_easyai_runtime_config(conn))
     try:
+        organization_name = test_org_name(project_name)
+        # A failed local binding must never claim an online organization by name.
+        # If a same-named test org already exists, require manual inspection.
+        same_name = client.find_organizations_by_name(organization_name)
+        if same_name:
+            raise RuntimeError(f"发现同名测试组织，拒绝自动认领：{organization_name}")
         parent = client.find_parent_organization(PARENT_ORG_NAME)
-        parent_id = parent.get("id", parent.get("org_id", ""))
+        parent_id = organization_id(parent)
         org = client.create_organization(test_org_name(project_name), parent_id, project_id)
-        org_id = org.get("id", org.get("org_id", ""))
+        org_id = organization_id(org)
         if not org_id:
             raise RuntimeError("组织创建响应缺少组织 ID")
         conn.execute("""

@@ -8,7 +8,7 @@ from pathlib import Path
 os.environ.setdefault("EASYAI_SYNC_MODE", "mock")
 os.environ.setdefault("EASYAI_SYNC_ENABLED", "true")
 
-from project_sync import EasyAIClient, encrypt_secret, ensure_tables, load_easyai_runtime_config, match_identities, persist_identity_matches, normalize_name, preview_project, redact_error, sync_project, test_org_name
+from project_sync import EasyAIClient, encrypt_secret, ensure_tables, ensure_binding, iter_organizations, load_easyai_runtime_config, match_identities, normalize_name, organization_id, persist_identity_matches, preview_project, redact_error, sync_project, test_org_name
 
 
 class ProjectSyncUnitTests(unittest.TestCase):
@@ -73,6 +73,22 @@ class ProjectSyncUnitTests(unittest.TestCase):
         client._mock_orgs["parent-2"] = {"id": "parent-2", "name": "执行项目组"}
         with self.assertRaisesRegex(RuntimeError, "名称冲突"):
             client.find_parent_organization("执行项目组")
+
+    def test_parent_lookup_reads_nested_children_and_mongo_id(self):
+        client = EasyAIClient()
+        client._mock_orgs["root"] = {"_id": "root", "name": "根", "children": [{"_id": "parent-2", "name": "执行项目组", "children": []}]}
+        parent = client.find_parent_organization("执行项目组")
+        self.assertEqual(organization_id(parent), "parent-2")
+        self.assertEqual(list(iter_organizations(client.list_organizations()))[-1]["_id"], "parent-2")
+
+    def test_mock_binding_uses_normalized_mongo_id(self):
+        self.conn.execute("INSERT INTO projects (id, name, start_date, end_date) VALUES ('p-bind', '绑定', '', '')")
+        client = EasyAIClient()
+        client._mock_orgs["parent"] = {"_id": "parent", "name": "执行项目组", "children": []}
+        with patch('project_sync.EasyAIClient', return_value=client):
+            binding = ensure_binding(self.conn, 'p-bind', '绑定')
+        self.assertEqual(binding['easyai_org_id'], 'mock-org-e7acab82c958')
+        self.assertEqual(binding['parent_org_id'], 'parent')
 
     def test_preview_marks_mock_provider_as_simulated(self):
         self.conn.execute("INSERT INTO projects (id, name, start_date, end_date) VALUES ('p1', '演示', '', '')")
