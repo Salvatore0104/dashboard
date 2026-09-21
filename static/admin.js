@@ -44,7 +44,8 @@
       "btProjectId", "btProjectName", "projectBusinessTrip", "projectBusinessTripStart", "projectBusinessTripEnd", "businessTripPersons",
       "syncPersonsList", "syncPersonsStatus", "leavePersonName", "leaveType", "leaveStart", "leaveEnd",
       "projectTitle", "defaultAssignDays", "dingAppKey", "dingAppSecret", "dingTestResult",
-      "themePrimary", "deptColorGrid", "statusColorGrid", "tripUpcomingColor", "tripActiveColor", "leaveActiveColor", "leaveUpcomingColor", "conflictColor"
+      "themePrimary", "deptColorGrid", "statusColorGrid", "tripUpcomingColor", "tripActiveColor", "leaveActiveColor", "leaveUpcomingColor", "conflictColor",
+      "easyaiAdminBaseUrl", "easyaiAdminApiKeyHeader", "easyaiAdminKey", "easyaiAdminKeyStatus", "easyaiTestResult"
     ].forEach((id) => els[id] = document.getElementById(id));
   }
 
@@ -69,6 +70,7 @@
     byId("saveConfigBtn").addEventListener("click", saveConfig);
     byId("resetConfigBtn").addEventListener("click", resetConfigDefaults);
     byId("testDingTalkBtn").addEventListener("click", testDingTalk);
+    byId("testEasyAIKeyBtn").addEventListener("click", testEasyAIConnection);
     byId("editDingBtn").addEventListener("click", enableDingEdit);
     byId("saveDingBtn").addEventListener("click", saveDingConfig);
     els.projectBusinessTrip.addEventListener("change", () => renderBusinessTripPersonPicker(currentTripProject()));
@@ -113,7 +115,7 @@
   function renderProjects() {
     els.projectCount.textContent = `${state.projects.length} 个`;
     if (!state.projects.length) {
-      els.projectBody.innerHTML = `<tr><td colspan="7" class="table-empty">暂无项目</td></tr>`;
+      els.projectBody.innerHTML = `<tr><td colspan="8" class="table-empty">暂无项目</td></tr>`;
       return;
     }
     els.projectBody.innerHTML = state.projects.map((p) => {
@@ -125,16 +127,52 @@
         <td>${p.business_trip == 1 ? '<span class="tag tag-trip">已启用</span>' : '<span class="tag">未启用</span>'}</td>
         <td>${p.business_trip == 1 ? `${esc(p.business_trip_start || "-")} ~ ${esc(p.business_trip_end || "-")}` : "-"}</td>
         <td>${esc(tripPersons)}</td>
+        <td><span class="tag" data-sync-status="${esc(p.id)}">读取中</span></td>
         <td class="actions">
           <button class="btn btn-sm" data-edit-project="${esc(p.id)}">${Icons.svg("admin")}编辑</button>
           <button class="btn btn-warning btn-sm" data-trip-project="${esc(p.id)}">${Icons.svg("plane")}出差</button>
+          <button class="btn btn-success btn-sm" data-sync-project="${esc(p.id)}">${Icons.svg("refresh")}同步组织</button>
           <button class="btn btn-danger btn-sm" data-delete-project="${esc(p.id)}">${Icons.svg("trash")}删除</button>
         </td>
       </tr>`;
     }).join("");
     els.projectBody.querySelectorAll("[data-edit-project]").forEach((btn) => btn.addEventListener("click", () => openProjectModal(btn.dataset.editProject)));
     els.projectBody.querySelectorAll("[data-trip-project]").forEach((btn) => btn.addEventListener("click", () => openBusinessTripModal(btn.dataset.tripProject)));
+    els.projectBody.querySelectorAll("[data-sync-project]").forEach((btn) => btn.addEventListener("click", () => syncProjectToEasyAI(btn.dataset.syncProject)));
     els.projectBody.querySelectorAll("[data-delete-project]").forEach((btn) => btn.addEventListener("click", () => deleteProject(btn.dataset.deleteProject)));
+    loadProjectSyncStatuses();
+  }
+
+  async function loadProjectSyncStatuses() {
+    await Promise.all(state.projects.map(async (project) => {
+      const tag = els.projectBody.querySelector(`[data-sync-status="${CSS.escape(String(project.id))}"]`);
+      if (!tag) return;
+      try {
+        const data = await fetchJson(`api/project-sync/${encodeURIComponent(project.id)}/status`);
+        const binding = data.binding;
+        tag.textContent = binding?.status === "active" ? `${binding.organization_name} · 已绑定` : (binding?.status === "error" ? "同步错误" : "未绑定");
+        tag.className = `tag ${binding?.status === "active" ? "tag-primary" : binding?.status === "error" ? "tag-danger" : ""}`;
+        tag.title = binding?.last_error || binding?.easyai_org_id || "";
+      } catch {
+        tag.textContent = "不可用";
+      }
+    }));
+  }
+
+  async function syncProjectToEasyAI(projectId) {
+    const project = state.projects.find((item) => String(item.id) === String(projectId));
+    if (!project) return;
+    try {
+      const preview = await fetchJson(`api/project-sync/${encodeURIComponent(projectId)}/preview`, { method: "POST" });
+      if (!preview.success) return toast(preview.message || "无法生成同步预览");
+      const confirmed = confirm(`同步项目“${project.name}”？\n\n唯一 ID 匹配 ${preview.added || 0} 人，待确认 ${preview.unmatched || 0} 人，身份冲突 ${preview.conflict || 0} 人。\n\n只绑定已有平台账号并追加组织关系，不创建账号、不修改登录名、密码、历史数据或已有组织。\n\n本地默认使用 Mock 模式；真实 API 写入必须显式配置绑定接口。`);
+      if (!confirmed) return;
+      const result = await fetchJson(`api/project-sync/${encodeURIComponent(projectId)}/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trigger: "manual", operatorId: "local-admin" }) });
+      toast(result.success ? `同步完成：${result.added || 0} 人，未匹配 ${result.unmatched || 0} 人` : (result.message || "同步失败"));
+      await loadProjectSyncStatuses();
+    } catch (error) {
+      toast(error.message || "同步失败");
+    }
   }
 
   function renderPersons() {
@@ -400,6 +438,13 @@
     els.leaveActiveColor.value = state.config.leave_active_color || "#dc2626";
     els.leaveUpcomingColor.value = state.config.leave_upcoming_color || "#2563eb";
     els.conflictColor.value = state.config.conflict_color || "#dc2626";
+    els.easyaiAdminBaseUrl.value = state.config.easyai_admin_base_url || "https://ai.wowidea.top/api";
+    els.easyaiAdminApiKeyHeader.value = state.config.easyai_admin_api_key_header || "X-Admin-Access-Key";
+    els.easyaiAdminKey.value = "";
+    els.easyaiAdminKey.placeholder = state.config.easyai_admin_api_key_masked ? `已配置 ${state.config.easyai_admin_api_key_masked}，留空保持不变` : "请输入管理员 Key";
+    els.easyaiAdminKeyStatus.textContent = state.config.easyai_admin_api_key_configured ? `已配置 ${state.config.easyai_admin_api_key_masked || ""}` : "未配置";
+    els.easyaiAdminKeyStatus.className = `tag ${state.config.easyai_admin_api_key_configured ? "tag-primary" : ""}`;
+    els.easyaiTestResult.style.display = "none";
     els.dingTestResult.style.display = "none";
 
     // 动态生成部门颜色选择器（只显示有人员的部门）
@@ -415,7 +460,7 @@
     const saveRow = byId("dingSaveRow");
     const savedTag = byId("dingSavedTag");
     if (editBtn) editBtn.style.display = hasDing ? "" : "none";
-    if (saveRow) saveRow.style.display = "none";
+    if (saveRow) saveRow.style.display = hasDing ? "none" : "flex";
     if (savedTag) savedTag.style.display = hasDing ? "inline-flex" : "none";
     if (savedTag) savedTag.className = "tag tag-primary";
 
@@ -506,7 +551,8 @@
     const appKey = els.dingAppKey.value.trim();
     const appSecret = els.dingAppSecret.value.trim();
     if (!appKey || !appSecret) return toast("请填写完整的钉钉 AppKey 和 AppSecret");
-    await fetch("api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ding_appKey: appKey, ding_appSecret: appSecret }) });
+    const response = await fetch("api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ding_appKey: appKey, ding_appSecret: appSecret }) });
+    if (!response.ok) return toast("钉钉配置保存失败");
     // 更新本地 state
     state.config.ding_appKey = appKey;
     state.config.ding_appSecret = appSecret;
@@ -520,11 +566,13 @@
   }
 
   async function saveConfig() {
+    const currentDingAppKey = els.dingAppKey.readOnly ? (state.config.ding_appKey || "") : els.dingAppKey.value.trim();
+    const currentDingAppSecret = els.dingAppSecret.readOnly ? (state.config.ding_appSecret || "") : els.dingAppSecret.value.trim();
     const body = {
       project_title: els.projectTitle.value.trim() || "Claw 项目排期看板",
       default_assign_days: els.defaultAssignDays.value || "1",
-      ding_appKey: state.config.ding_appKey || "",
-      ding_appSecret: state.config.ding_appSecret || "",
+      ding_appKey: currentDingAppKey,
+      ding_appSecret: currentDingAppSecret,
       theme_primary: els.themePrimary.value,
       trip_upcoming_color: els.tripUpcomingColor.value,
       trip_active_color: els.tripActiveColor.value,
@@ -533,15 +581,32 @@
       conflict_color: els.conflictColor.value,
       conflict_opacity: state.config.conflict_opacity || "30"
     };
+    body.easyai_admin_base_url = els.easyaiAdminBaseUrl.value.trim() || "https://ai.wowidea.top/api";
+    body.easyai_admin_api_key_header = els.easyaiAdminApiKeyHeader.value.trim() || "X-Admin-Access-Key";
+    if (els.easyaiAdminKey.value.trim()) body.easyai_admin_api_key = els.easyaiAdminKey.value.trim();
     // 收集动态部门颜色
     els.deptColorGrid.querySelectorAll(".dept-color-input").forEach(input => {
       body[input.dataset.key] = input.value;
     });
-    await fetch("api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const response = await fetch("api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!response.ok) return toast("配置保存失败");
     window.ThemeStore?.save({ ...state.config, ...body });
     closeModal("configModal");
     await loadAll();
     toast("配置已保存");
+  }
+
+  async function testEasyAIConnection() {
+    els.easyaiTestResult.style.display = "inline-flex";
+    els.easyaiTestResult.textContent = "正在测试...";
+    try {
+      const data = await fetchJson("api/easyai/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiKey: els.easyaiAdminKey.value.trim() }) });
+      els.easyaiTestResult.textContent = data.message || (data.success ? "连接成功" : "连接失败");
+      els.easyaiTestResult.className = `tag ${data.success ? "tag-primary" : "tag-danger"}`;
+    } catch (error) {
+      els.easyaiTestResult.textContent = error.message || "连接失败";
+      els.easyaiTestResult.className = "tag tag-danger";
+    }
   }
 
   async function syncLeaveNow() {

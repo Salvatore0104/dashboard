@@ -9,13 +9,25 @@ from flask_cors import CORS
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load local development secrets before importing modules that read settings at import time.
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env.local'), override=False)
+load_dotenv(override=False)
+
+from project_sync import ensure_tables, ensure_binding, preview_project, sync_project, redact_error, SYNC_ENABLED, encrypt_secret, decrypt_secret, mask_secret, load_easyai_runtime_config, EasyAIClient
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
 
 PORT = int(os.getenv('PORT', 5000))
 DB_PATH = os.environ.get('DB_PATH', os.path.join(os.path.dirname(__file__), 'claw.db'))
+
+
+def get_dingtalk_credentials(config=None):
+    """Return AppKey/AppSecret without logging or persisting environment values."""
+    config = config or {}
+    app_key = config.get('ding_appKey') or os.getenv('DINGTALK_APP_KEY', '') or os.getenv('DINGTALK_CLIENT_ID', '')
+    app_secret = config.get('ding_appSecret') or os.getenv('DINGTALK_APP_SECRET', '') or os.getenv('DINGTALK_CLIENT_SECRET', '')
+    return app_key.strip(), app_secret.strip()
 
 # SSE 订阅者队列
 sse_clients = []
@@ -64,6 +76,7 @@ def init_db():
         group_type TEXT DEFAULT 'pre',
         avatar TEXT DEFAULT '',
         ding_id TEXT DEFAULT '',
+        dingtalk_union_id TEXT DEFAULT '',
         department TEXT DEFAULT '',
         selected INTEGER DEFAULT 0,
         sort_order INTEGER DEFAULT 0,
@@ -90,6 +103,7 @@ def init_db():
         key TEXT PRIMARY KEY,
         value TEXT
     )''')
+    ensure_tables(conn)
 
     # 数据库迁移：确保现有表有必要的字段
     try:
@@ -99,6 +113,9 @@ def init_db():
         if 'leave_type' not in columns:
             c.execute("ALTER TABLE persons ADD COLUMN leave_type TEXT DEFAULT ''")
             print('[DB] Added leave_type column to persons table')
+        if 'dingtalk_union_id' not in columns:
+            c.execute("ALTER TABLE persons ADD COLUMN dingtalk_union_id TEXT DEFAULT ''")
+            print('[DB] Added dingtalk_union_id column to persons table')
     except Exception as e:
         print(f'[DB] Migration warning: {e}')
 
@@ -174,9 +191,15 @@ def create_project():
          data.get('businessTrip', 0), data.get('businessTripStart', ''), data.get('businessTripEnd', ''), business_trip_persons)
     )
     conn.commit()
+    sync_error = ''
+    try:
+        ensure_binding(conn, pid, data['name'])
+    except Exception as exc:
+        sync_error = redact_error(exc)
+    conn.commit()
     conn.close()
     broadcast('projects_changed', {'action': 'create', 'id': pid})
-    return jsonify({'success': True, 'id': pid})
+    return jsonify({'success': True, 'id': pid, 'syncError': sync_error})
 
 @app.route('/api/projects/<pid>', methods=['PUT'])
 def update_project(pid):
@@ -235,6 +258,83 @@ def delete_project(pid):
     broadcast('projects_changed', {'action': 'delete', 'id': pid})
     return jsonify({'success': True})
 
+# ==================== 项目组织同步 API ====================
+
+@app.route('/api/project-sync/<pid>/status', methods=['GET'])
+def project_sync_status(pid):
+    conn = get_db()
+    binding = conn.execute('SELECT * FROM project_easyai_binding WHERE project_id=?', (pid,)).fetchone()
+    runs = conn.execute('SELECT * FROM sync_run WHERE project_id=? ORDER BY started_at DESC LIMIT 10', (pid,)).fetchall()
+    conn.close()
+    return jsonify({'binding': dict(binding) if binding else None, 'runs': [dict(row) for row in runs], 'enabled': SYNC_ENABLED})
+
+
+@app.route('/api/project-sync/<pid>/preview', methods=['POST'])
+def project_sync_preview(pid):
+    conn = get_db()
+    try:
+        result = preview_project(conn, pid)
+        conn.commit()
+        return jsonify({'success': True, **result})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({'success': False, 'message': redact_error(exc)}), 400
+    finally:
+        conn.close()
+
+
+@app.route('/api/project-sync/<pid>/run', methods=['POST'])
+def project_sync_run(pid):
+    data = request.json or {}
+    conn = get_db()
+    try:
+        result = sync_project(conn, pid, data.get('trigger', 'manual'), data.get('operatorId', 'local-admin'))
+        conn.commit()
+        broadcast('projects_changed', {'action': 'sync', 'id': pid})
+        return jsonify(result)
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({'success': False, 'message': redact_error(exc)}), 400
+    finally:
+        conn.close()
+
+
+@app.route('/api/project-sync/runs', methods=['GET'])
+def project_sync_runs():
+    conn = get_db()
+    rows = conn.execute('SELECT * FROM sync_run ORDER BY started_at DESC LIMIT 100').fetchall()
+    conn.close()
+    return jsonify([dict(row) for row in rows])
+
+
+@app.route('/api/project-sync/identities', methods=['GET'])
+def project_sync_identities():
+    conn = get_db()
+    rows = conn.execute('SELECT * FROM external_user_identity ORDER BY match_status, display_name').fetchall()
+    conn.close()
+    return jsonify([dict(row) for row in rows])
+
+
+@app.route('/api/project-sync/identities/<user_id>/confirm', methods=['POST'])
+def confirm_project_sync_identity(user_id):
+    data = request.json or {}
+    easyai_user_id = str(data.get('easyaiUserId', '')).strip()
+    if not easyai_user_id:
+        return jsonify({'success': False, 'message': 'easyaiUserId 不能为空'}), 400
+    conn = get_db()
+    current = conn.execute('SELECT dingtalk_user_id, dingtalk_union_id FROM external_user_identity WHERE dashboard_user_id=?', (user_id,)).fetchone()
+    if not current:
+        conn.close()
+        return jsonify({'success': False, 'message': '找不到待确认的钉钉身份记录'}), 404
+    duplicate = conn.execute('SELECT dashboard_user_id FROM external_user_identity WHERE easyai_user_id=? AND dashboard_user_id<>?', (easyai_user_id, user_id)).fetchone()
+    if duplicate:
+        conn.close()
+        return jsonify({'success': False, 'message': '该平台用户已绑定其他钉钉身份，已拒绝覆盖'}), 409
+    conn.execute('''UPDATE external_user_identity SET easyai_user_id=?, match_status='confirmed', match_source='manual', confirmed_by=?, confirmed_at=?, updated_at=datetime('now') WHERE dashboard_user_id=?''', (easyai_user_id, data.get('operatorId', 'local-admin'), int(time.time() * 1000), user_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
 # ==================== 人员 API ====================
 
 @app.route('/api/persons', methods=['GET'])
@@ -268,6 +368,7 @@ def create_person():
                     group_type = ?,
                     avatar = ?,
                     ding_id = ?,
+                    dingtalk_union_id = ?,
                     department = ?,
                     selected = ?
                 WHERE id = ?
@@ -276,6 +377,7 @@ def create_person():
                 data.get('groupType', 'pre'),
                 data.get('avatar', ''),
                 data.get('dingId', ''),
+                data.get('unionId', data.get('dingtalkUnionId', '')),
                 data.get('department', ''),
                 1 if data.get('selected') else 0,
                 pid
@@ -284,11 +386,11 @@ def create_person():
         else:
             # 不存在则插入
             conn.execute('''
-                INSERT INTO persons (id, name, group_type, avatar, ding_id, department, selected, sort_order, leave_status, leave_start, leave_end, leave_type)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                INSERT INTO persons (id, name, group_type, avatar, ding_id, dingtalk_union_id, department, selected, sort_order, leave_status, leave_start, leave_end, leave_type)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             ''', (
                 pid, name, data.get('groupType', 'pre'), data.get('avatar', ''),
-                data.get('dingId', ''), data.get('department', ''),
+                data.get('dingId', ''), data.get('unionId', data.get('dingtalkUnionId', '')), data.get('department', ''),
                 1 if data.get('selected') else 0, data.get('sortOrder', 0),
                 data.get('leaveStatus', ''), data.get('leaveStart', ''), data.get('leaveEnd', ''),
                 data.get('leaveType', '')
@@ -319,9 +421,9 @@ def update_person(pid):
     data = request.json
     conn = get_db()
     conn.execute(
-        'UPDATE persons SET name=?, group_type=?, avatar=?, ding_id=?, department=?, selected=?, sort_order=?, leave_status=?, leave_start=?, leave_end=?, leave_type=? WHERE id=?',
+        'UPDATE persons SET name=?, group_type=?, avatar=?, ding_id=?, dingtalk_union_id=?, department=?, selected=?, sort_order=?, leave_status=?, leave_start=?, leave_end=?, leave_type=? WHERE id=?',
         (data['name'], data.get('groupType', 'pre'), data.get('avatar', ''),
-         data.get('dingId', ''), data.get('department', ''),
+         data.get('dingId', ''), data.get('unionId', data.get('dingtalkUnionId', '')), data.get('department', ''),
          1 if data.get('selected') else 0, data.get('sortOrder', 0),
          data.get('leaveStatus', ''), data.get('leaveStart', ''), data.get('leaveEnd', ''),
          data.get('leaveType', ''), pid)
@@ -414,18 +516,55 @@ def get_config():
     conn = get_db()
     rows = conn.execute('SELECT key, value FROM config').fetchall()
     conn.close()
-    return jsonify({r['key']: r['value'] for r in rows})
+    result = {r['key']: r['value'] for r in rows if r['key'] != 'easyai_admin_api_key_encrypted'}
+    encrypted = next((r['value'] for r in rows if r['key'] == 'easyai_admin_api_key_encrypted'), '')
+    env_key = os.getenv('EASYAI_ADMIN_API_KEY', '')
+    configured_key = decrypt_secret(encrypted) if encrypted else env_key
+    result['easyai_admin_api_key_configured'] = bool(configured_key)
+    result['easyai_admin_api_key_masked'] = mask_secret(configured_key)
+    result.setdefault('easyai_admin_base_url', os.getenv('EASYAI_ADMIN_BASE_URL', 'https://ai.wowidea.top/api'))
+    result.setdefault('easyai_admin_api_key_header', os.getenv('EASYAI_ADMIN_API_KEY_HEADER', 'X-Admin-Access-Key'))
+    return jsonify(result)
 
 @app.route('/api/config', methods=['POST'])
 def save_config():
     data = request.json
     conn = get_db()
     for key, value in data.items():
+        if key == 'easyai_admin_api_key':
+            if str(value or '').strip():
+                conn.execute('INSERT OR REPLACE INTO config (key, value) VALUES (?,?)', ("easyai_admin_api_key_encrypted", encrypt_secret(str(value).strip())))
+            continue
+        if key == 'easyai_admin_api_key_clear':
+            if value:
+                conn.execute('DELETE FROM config WHERE key=?', ('easyai_admin_api_key_encrypted',))
+            continue
         conn.execute('INSERT OR REPLACE INTO config (key, value) VALUES (?,?)', (key, str(value)))
     conn.commit()
     conn.close()
     broadcast('config_changed', {'action': 'update'})
     return jsonify({'success': True})
+
+
+@app.route('/api/easyai/test', methods=['POST'])
+def test_easyai_connection():
+    data = request.json or {}
+    conn = get_db()
+    try:
+        runtime = load_easyai_runtime_config(conn)
+        if str(data.get('apiKey', '')).strip():
+            runtime['api_key'] = str(data['apiKey']).strip()
+        client = EasyAIClient(runtime)
+        if client.mode == 'mock':
+            return jsonify({'success': True, 'message': 'Mock 配置可用'})
+        if not client.api_key:
+            return jsonify({'success': False, 'message': '尚未配置 wowidea 管理 Key'}), 400
+        organizations = client.list_organizations()
+        return jsonify({'success': True, 'message': f'连接成功，读取到 {len(organizations)} 个组织'})
+    except Exception as exc:
+        return jsonify({'success': False, 'message': redact_error(exc)}), 400
+    finally:
+        conn.close()
 
 # ==================== 钉钉 API ====================
 
@@ -566,6 +705,7 @@ def get_dingtalk_users():
                             all_users.append({
                                 "id": user_id,
                                 "dingId": user_id,
+                                "unionId": u.get('unionid', u.get('union_id', '')),
                                 "name": u.get('name'),
                                 "avatar": u.get('avatar', ''),
                                 "department": dept_name,
@@ -599,8 +739,8 @@ def sync_leave():
     data = request.json
     if data is None:
         data = {}
-    app_key = data.get('appKey') or data.get('ding_appKey')
-    app_secret = data.get('appSecret') or data.get('ding_appSecret')
+    app_key = data.get('appKey') or data.get('ding_appKey') or os.getenv('DINGTALK_APP_KEY', '') or os.getenv('DINGTALK_CLIENT_ID', '')
+    app_secret = data.get('appSecret') or data.get('ding_appSecret') or os.getenv('DINGTALK_APP_SECRET', '') or os.getenv('DINGTALK_CLIENT_SECRET', '')
     # 默认同步未来30天
     days = int(data.get('days', 30))
     
@@ -609,8 +749,7 @@ def sync_leave():
         conn = get_db()
         config = {r['key']: r['value'] for r in conn.execute('SELECT key, value FROM config').fetchall()}
         conn.close()
-        app_key = app_key or config.get('ding_appKey')
-        app_secret = app_secret or config.get('ding_appSecret')
+        app_key, app_secret = get_dingtalk_credentials(config)
         print(f"[Leave Sync] 从config读取: appKey={'已设置' if app_key else '未设置'}, appSecret={'已设置' if app_secret else '未设置'}")
         print(f"[Leave Sync] config keys: {list(config.keys())}")
     
@@ -1054,8 +1193,7 @@ def manual_sync_leave():
     config = {r['key']: r['value'] for r in conn.execute('SELECT key, value FROM config').fetchall()}
     conn.close()
     
-    app_key = config.get('ding_appKey')
-    app_secret = config.get('ding_appSecret')
+    app_key, app_secret = get_dingtalk_credentials(config)
     
     if not app_key or not app_secret:
         return jsonify({"success": False, "message": "请先配置钉钉 AppKey 和 AppSecret"})
@@ -1132,8 +1270,7 @@ def schedule_leave_sync():
                         sleep_seconds = max(5, min(60, remaining_ms / 1000))
                         time.sleep(sleep_seconds)
                         continue
-                    app_key = config.get('ding_appKey')
-                    app_secret = config.get('ding_appSecret')
+                    app_key, app_secret = get_dingtalk_credentials(config)
                     
                     if app_key and app_secret:
                         print(f"[AutoSync] 开始定时同步请假状态...")
@@ -1258,6 +1395,11 @@ def sync_leave_internal(app_key, app_secret):
 leave_scheduler_thread = None
 leave_scheduler_lock = threading.Lock()
 
+project_sync_scheduler_thread = None
+project_sync_scheduler_lock = threading.Lock()
+PROJECT_SYNC_SCHEDULER_ENABLED = os.getenv('SYNC_SCHEDULER_ENABLED', 'false').strip().lower() in {'1', 'true', 'yes', 'on'}
+PROJECT_SYNC_INTERVAL_SECONDS = max(60, int(os.getenv('SYNC_INTERVAL_MINUTES', '10')) * 60)
+
 def start_leave_sync_scheduler():
     """启动一次请假定时同步线程。"""
     global leave_scheduler_thread
@@ -1266,6 +1408,38 @@ def start_leave_sync_scheduler():
             return
         leave_scheduler_thread = threading.Thread(target=schedule_leave_sync, daemon=True, name="leave-sync-scheduler")
         leave_scheduler_thread.start()
+
+
+def schedule_project_sync():
+    """Run project membership synchronization at a conservative interval."""
+    while True:
+        time.sleep(PROJECT_SYNC_INTERVAL_SECONDS)
+        conn = get_db()
+        projects = conn.execute('SELECT id FROM projects ORDER BY id').fetchall()
+        conn.close()
+        for project in projects:
+            conn = get_db()
+            try:
+                sync_project(conn, project['id'], 'scheduler', 'scheduler')
+                conn.commit()
+            except Exception as exc:
+                conn.rollback()
+                print(f'[ProjectSync] scheduler failed for {project["id"]}: {redact_error(exc)}')
+            finally:
+                conn.close()
+
+
+def start_project_sync_scheduler():
+    global project_sync_scheduler_thread
+    if not PROJECT_SYNC_SCHEDULER_ENABLED:
+        print('[ProjectSync] scheduler disabled (set SYNC_SCHEDULER_ENABLED=true to enable)')
+        return
+    with project_sync_scheduler_lock:
+        if project_sync_scheduler_thread and project_sync_scheduler_thread.is_alive():
+            return
+        project_sync_scheduler_thread = threading.Thread(target=schedule_project_sync, daemon=True, name='project-sync-scheduler')
+        project_sync_scheduler_thread.start()
+        print(f'[ProjectSync] scheduler enabled, interval={PROJECT_SYNC_INTERVAL_SECONDS}s')
 
 # ==================== 静态文件 ====================
 
@@ -1291,6 +1465,7 @@ def health():
 if __name__ == '__main__':
     init_db()
     start_leave_sync_scheduler()
+    start_project_sync_scheduler()
     
     # 启动时自动同步一次请假信息
     def startup_sync_leave():
@@ -1305,8 +1480,7 @@ if __name__ == '__main__':
             db_persons = conn.execute('SELECT * FROM persons').fetchall()
             conn.close()
             
-            app_key = config.get('ding_appKey')
-            app_secret = config.get('ding_appSecret')
+            app_key, app_secret = get_dingtalk_credentials(config)
             
             if app_key and app_secret:
                 print("[Startup] 检测到钉钉配置，开始首次同步请假信息...")

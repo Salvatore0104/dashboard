@@ -55,6 +55,7 @@
                   <th>出差状态</th>
                   <th>出差日期</th>
                   <th>出差人员</th>
+                  <th>EasyAI 组织</th>
                   <th class="actions">操作</th>
                 </tr>
               </thead>
@@ -212,6 +213,22 @@
             <button class="btn btn-success" id="testDingTalkBtn" type="button"><span data-icon="refresh"></span>测试钉钉连接</button>
             <span class="tag" id="dingTestResult" style="display:none"></span>
           </div>
+        </section>
+        <section class="settings-section">
+          <h3>wowidea.top 项目组织同步</h3>
+          <div class="field"><label>管理 API 地址</label><input class="input" id="easyaiAdminBaseUrl" type="url" placeholder="https://ai.wowidea.top/api"></div>
+          <div class="field"><label>认证请求头</label><input class="input" id="easyaiAdminApiKeyHeader" type="text" placeholder="X-Admin-Access-Key"></div>
+          <div class="field"><label>管理员 Key</label>
+            <div class="input-row">
+              <input class="input" id="easyaiAdminKey" type="password" autocomplete="new-password" placeholder="留空表示保持现有 Key">
+              <span class="tag" id="easyaiAdminKeyStatus">未配置</span>
+            </div>
+          </div>
+          <div class="inline-actions">
+            <button class="btn btn-success" id="testEasyAIKeyBtn" type="button"><span data-icon="refresh"></span>测试 wowidea 连接</button>
+            <span class="tag" id="easyaiTestResult" style="display:none"></span>
+          </div>
+          <small class="muted">Key 只提交给本地后端保存，页面不会回显完整值。</small>
         </section>
         <section class="settings-section">
           <h3>部门颜色</h3>
