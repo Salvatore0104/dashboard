@@ -216,17 +216,20 @@
         </section>
         <section class="settings-section">
           <h3>wowidea.top 项目组织同步</h3>
-          <div class="field"><label>管理员 Bearer JWT</label>
-            <div class="input-row"><input class="input" id="easyaiAdminBearerToken" type="password" autocomplete="new-password" placeholder="粘贴 JWT 或 Bearer JWT"><span class="tag" id="easyaiAdminBearerStatus">未配置</span></div>
+          <div class="field"><label>wowidea.top 管理员账号</label>
+            <div class="input-row"><input class="input" id="easyaiAdminUsername" type="text" autocomplete="username" placeholder="输入管理员账号"><span class="tag" id="easyaiAdminCredentialsStatus">未配置</span></div>
+          </div>
+          <div class="field"><label>wowidea.top 管理员密码</label>
+            <div class="input-row"><input class="input" id="easyaiAdminPassword" type="password" autocomplete="current-password" placeholder="输入管理员密码"></div>
           </div>
           <div class="inline-actions">
-            <button class="btn btn-primary" id="saveEasyAIBearerBtn" type="button"><span data-icon="save"></span>保存管理员 Bearer JWT</button>
+            <button class="btn btn-primary" id="saveEasyAICredentialsBtn" type="button"><span data-icon="save"></span>保存管理员账号</button>
           </div>
           <div class="inline-actions">
             <button class="btn btn-success" id="testEasyAIKeyBtn" type="button"><span data-icon="refresh"></span>测试 wowidea 连接</button>
             <span class="tag" id="easyaiTestResult" style="display:none"></span>
           </div>
-          <div class="muted">JWT 只提交给本地后端加密保存，页面不会回显完整 Token。</div>
+          <div class="muted">账号和密码只提交给本地后端加密保存，页面不会回显密码或 JWT。</div>
         </section>
         <section class="settings-section">
           <h3>部门颜色</h3>

@@ -115,11 +115,11 @@ class ProjectSyncUnitTests(unittest.TestCase):
     def test_admin_page_has_independent_login_save_control(self):
         html = Path(__file__).with_name("static").joinpath("admin.html").read_text(encoding="utf-8")
         js = Path(__file__).with_name("static").joinpath("admin.js").read_text(encoding="utf-8")
-        self.assertIn('id="saveEasyAIBearerBtn"', html)
-        self.assertIn("保存管理员 Bearer JWT", html)
-        self.assertIn("async function saveEasyAIBearerConfig", js)
-        self.assertIn('body = { easyai_admin_bearer_token: token }', js)
-        self.assertIn('state.config.easyai_admin_bearer_token_masked', js)
+        self.assertIn('id="saveEasyAICredentialsBtn"', html)
+        self.assertIn("保存管理员账号", html)
+        self.assertIn("async function saveEasyAICredentials", js)
+        self.assertIn('body = { easyai_admin_username: username, easyai_admin_password: password }', js)
+        self.assertIn('state.config.easyai_admin_credentials_configured', js)
 
     def test_password_mask_is_not_exposed_by_config_response_code(self):
         app_source = Path(__file__).with_name("app.py").read_text(encoding="utf-8")

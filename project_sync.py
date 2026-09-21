@@ -71,16 +71,24 @@ def mask_secret(value):
 def load_easyai_runtime_config(conn=None):
     config = {}
     if conn is not None:
-        rows = conn.execute("SELECT key, value FROM config WHERE key IN ('easyai_admin_bearer_token_encrypted')").fetchall()
+        rows = conn.execute("SELECT key, value FROM config WHERE key IN ('easyai_admin_bearer_token_encrypted', 'easyai_admin_username_encrypted', 'easyai_admin_password_encrypted')").fetchall()
         config.update({row["key"]: row["value"] for row in rows})
     encrypted = config.get("easyai_admin_bearer_token_encrypted", "")
+    encrypted_username = config.get("easyai_admin_username_encrypted", "")
+    encrypted_password = config.get("easyai_admin_password_encrypted", "")
     try:
         token = decrypt_secret(encrypted) if encrypted else os.getenv("EASYAI_ADMIN_BEARER_TOKEN", "")
+        username = decrypt_secret(encrypted_username) if encrypted_username else os.getenv("EASYAI_ADMIN_USERNAME", "")
+        password = decrypt_secret(encrypted_password) if encrypted_password else os.getenv("EASYAI_ADMIN_PASSWORD", "")
     except RuntimeError:
         token = ""
+        username = ""
+        password = ""
     return {
         "base_url": EASYAI_BASE_URL,
         "bearer_token": normalize_bearer_token(token),
+        "username": username.strip(),
+        "password": password,
     }
 
 
@@ -118,13 +126,37 @@ class EasyAIClient:
         runtime_config = runtime_config or {}
         self.base_url = normalize_base_url(runtime_config.get("base_url") or EASYAI_BASE_URL)
         self.bearer_token = normalize_bearer_token(runtime_config.get("bearer_token"))
+        self.username = str(runtime_config.get("username") or "").strip()
+        self.password = str(runtime_config.get("password") or "")
+        self.refresh_token = str(runtime_config.get("refresh_token") or "")
         self._mock_users = {}
         self._mock_orgs = {}
 
     def _headers(self):
-        if not self.bearer_token:
-            raise RuntimeError("wowidea 管理员 Bearer JWT 未配置")
+        self._ensure_authenticated()
         return {"Authorization": self.bearer_token, "Content-Type": "application/json"}
+
+    def _ensure_authenticated(self):
+        if self.bearer_token:
+            return
+        if not self.username or not self.password:
+            raise RuntimeError("尚未配置 wowidea 管理员账号和密码")
+        payloads = ({"username": self.username, "password": self.password}, {"account": self.username, "password": self.password})
+        last_error = None
+        for payload in payloads:
+            response = requests.post(f"{self.base_url}/users/loginByUsername", json=payload, timeout=15)
+            if response.ok:
+                data = response.json() if response.content else {}
+                body = data.get("data", data) if isinstance(data, dict) else {}
+                token = body.get("accessToken") or body.get("access_token") or body.get("token")
+                if token:
+                    self.bearer_token = normalize_bearer_token(token)
+                    self.refresh_token = body.get("refreshToken") or body.get("refresh_token") or ""
+                    return
+                last_error = "登录响应缺少 access token"
+            else:
+                last_error = f"EasyAI 登录 API {response.status_code}"
+        raise RuntimeError(last_error or "wowidea 管理员登录失败")
 
     def _request(self, method, path, **kwargs):
         response = requests.request(method, f"{self.base_url}{path}", headers=self._headers(), timeout=15, **kwargs)

@@ -527,6 +527,8 @@ def get_config():
     conn.close()
     result = {r['key']: r['value'] for r in rows if not r['key'].startswith('easyai_')}
     encrypted = next((r['value'] for r in rows if r['key'] == 'easyai_admin_bearer_token_encrypted'), '')
+    encrypted_username = next((r['value'] for r in rows if r['key'] == 'easyai_admin_username_encrypted'), '')
+    encrypted_password = next((r['value'] for r in rows if r['key'] == 'easyai_admin_password_encrypted'), '')
     env_key = os.getenv('EASYAI_ADMIN_BEARER_TOKEN', '')
     try:
         configured_key = decrypt_secret(encrypted) if encrypted else env_key
@@ -538,6 +540,13 @@ def get_config():
         conn.close()
     result['easyai_admin_bearer_token_configured'] = bool(configured_key)
     result['easyai_admin_bearer_token_masked'] = mask_secret(configured_key)
+    try:
+        username = decrypt_secret(encrypted_username) if encrypted_username else os.getenv('EASYAI_ADMIN_USERNAME', '')
+        password = decrypt_secret(encrypted_password) if encrypted_password else os.getenv('EASYAI_ADMIN_PASSWORD', '')
+    except RuntimeError:
+        username, password = '', ''
+    result['easyai_admin_credentials_configured'] = bool(username and password)
+    result['easyai_admin_username'] = username if username else ''
     return jsonify(result)
 
 @app.route('/api/config', methods=['POST'])
@@ -552,6 +561,14 @@ def save_config():
         if key == 'easyai_admin_bearer_token_clear':
             if value:
                 conn.execute('DELETE FROM config WHERE key=?', ('easyai_admin_bearer_token_encrypted',))
+            continue
+        if key == 'easyai_admin_username':
+            if str(value or '').strip():
+                conn.execute('INSERT OR REPLACE INTO config (key, value) VALUES (?,?)', ('easyai_admin_username_encrypted', encrypt_secret(str(value).strip())))
+            continue
+        if key == 'easyai_admin_password':
+            if str(value or ''):
+                conn.execute('INSERT OR REPLACE INTO config (key, value) VALUES (?,?)', ('easyai_admin_password_encrypted', encrypt_secret(str(value))))
             continue
         if key in {'easyai_admin_api_key', 'easyai_admin_api_key_encrypted', 'easyai_admin_username', 'easyai_admin_password', 'easyai_admin_password_encrypted', 'easyai_auth_path', 'easyai_auth_username_field', 'easyai_auth_password_field', 'easyai_auth_token_field'}:
             continue
@@ -573,8 +590,6 @@ def test_easyai_connection():
         client = EasyAIClient(runtime)
         if client.mode == 'mock':
             return jsonify({'success': True, 'message': 'Mock 配置可用'})
-        if not client.bearer_token:
-            return jsonify({'success': False, 'message': '尚未配置 wowidea 管理员 Bearer JWT'}), 400
         organizations = client.list_organizations()
         return jsonify({'success': True, 'message': f'连接成功，读取到 {len(organizations)} 个组织'})
     except Exception as exc:
