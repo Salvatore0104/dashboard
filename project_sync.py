@@ -209,33 +209,52 @@ class EasyAIClient:
             cached = _AUTH_CACHE.get(cache_key)
             if cached and cached["expires_at"] > time.time() + 30:
                 return cached["token"]
-        payload = {self.username_field: self.username, self.password_field: self.password}
+        payloads = [
+            {"account": self.username, "password": self.password},
+            {"username": self.username, "password": self.password},
+            {"userName": self.username, "password": self.password},
+        ]
         not_found = True
+        server_error = False
+        parameter_error = False
         for path in (self.auth_path, EASYAI_AUTH_FALLBACK_PATH):
-            try:
-                response = requests.post(f"{self.base_url}{path}", json=payload, timeout=15)
-            except requests.RequestException as exc:
-                raise RuntimeError(f"wowidea 登录网络错误：{exc.__class__.__name__}")
-            if response.status_code == 404:
+            path_not_found = True
+            for payload in payloads:
+                try:
+                    response = requests.post(f"{self.base_url}{path}", json=payload, timeout=15)
+                except requests.RequestException as exc:
+                    raise RuntimeError(f"wowidea 登录网络错误：{exc.__class__.__name__}")
+                if response.status_code == 404:
+                    break
+                path_not_found = False
+                not_found = False
+                if response.status_code in (401, 403):
+                    raise RuntimeError("wowidea 登录失败：账号密码错误或无权登录")
+                if response.status_code in (400, 422):
+                    parameter_error = True
+                    continue
+                if response.status_code >= 500:
+                    server_error = True
+                    continue
+                if not response.ok:
+                    raise RuntimeError(f"wowidea 登录失败：HTTP {response.status_code}")
+                try:
+                    data = response.json() if response.content else {}
+                except ValueError:
+                    raise RuntimeError("wowidea 登录响应不是 JSON")
+                token = self._extract_token(data)
+                if not token:
+                    raise RuntimeError("wowidea 登录响应缺少 JWT")
+                expires_at = self._token_expiry(token, data)
+                with _AUTH_CACHE_LOCK:
+                    _AUTH_CACHE[cache_key] = {"token": token, "expires_at": expires_at}
+                return token
+            if path_not_found:
                 continue
-            not_found = False
-            if response.status_code in (401, 403):
-                raise RuntimeError("wowidea 登录失败：账号密码错误或无权登录")
-            if not response.ok:
-                raise RuntimeError(f"wowidea 登录失败：HTTP {response.status_code}")
-            try:
-                data = response.json() if response.content else {}
-            except ValueError:
-                raise RuntimeError("wowidea 登录响应不是 JSON")
-            token = self._extract_token(data)
-            if not token:
-                raise RuntimeError("wowidea 登录响应缺少 JWT")
-            expires_at = self._token_expiry(token, data)
-            with _AUTH_CACHE_LOCK:
-                _AUTH_CACHE[cache_key] = {"token": token, "expires_at": expires_at}
-            return token
         if not_found:
             raise RuntimeError("wowidea 登录接口不存在")
+        if server_error or parameter_error:
+            raise RuntimeError("wowidea 登录接口参数不匹配或平台登录异常")
         raise RuntimeError("wowidea 登录失败")
 
     def _request(self, method, path, **kwargs):

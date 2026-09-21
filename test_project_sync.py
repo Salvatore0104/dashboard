@@ -152,6 +152,22 @@ class ProjectSyncUnitTests(unittest.TestCase):
             self.assertEqual(client._headers()["Authorization"], "Bearer jwt-value")
             self.assertEqual(login.call_count, 2)
 
+    def test_login_tries_compatible_payloads_after_server_error(self):
+        class Response:
+            def __init__(self, status_code):
+                self.status_code = status_code
+                self.ok = status_code == 200
+                self.content = b'{"access_token":"jwt-value"}' if self.ok else b''
+
+            def json(self):
+                return {"access_token": "jwt-value"}
+
+        client = EasyAIClient({"base_url": "https://wowidea.top/api", "username": "admin-parameter", "password": "secret"})
+        with patch("project_sync.requests.post", side_effect=[Response(500), Response(200)]) as login:
+            self.assertEqual(client._headers()["Authorization"], "Bearer jwt-value")
+            self.assertEqual(login.call_args_list[0].kwargs["json"], {"account": "admin-parameter", "password": "secret"})
+            self.assertEqual(login.call_count, 2)
+
     def test_admin_page_has_independent_login_save_control(self):
         html = Path(__file__).with_name("static").joinpath("admin.html").read_text(encoding="utf-8")
         js = Path(__file__).with_name("static").joinpath("admin.js").read_text(encoding="utf-8")
