@@ -438,7 +438,7 @@
     els.leaveActiveColor.value = state.config.leave_active_color || "#dc2626";
     els.leaveUpcomingColor.value = state.config.leave_upcoming_color || "#2563eb";
     els.conflictColor.value = state.config.conflict_color || "#dc2626";
-    els.easyaiAdminBaseUrl.value = state.config.easyai_admin_base_url || "https://ai.wowidea.top";
+    els.easyaiAdminBaseUrl.value = state.config.easyai_admin_base_url || "https://ai.wowidea.top/api";
     els.easyaiAdminApiKeyHeader.value = state.config.easyai_admin_api_key_header || "X-Admin-Access-Key";
     els.easyaiAdminKey.value = "";
     els.easyaiAdminKey.placeholder = state.config.easyai_admin_api_key_masked ? `已配置 ${state.config.easyai_admin_api_key_masked}，留空保持不变` : "请输入管理员 Key";
@@ -578,7 +578,7 @@
       conflict_color: els.conflictColor.value,
       conflict_opacity: state.config.conflict_opacity || "30"
     };
-    body.easyai_admin_base_url = els.easyaiAdminBaseUrl.value.trim() || "https://ai.wowidea.top";
+    body.easyai_admin_base_url = els.easyaiAdminBaseUrl.value.trim() || "https://ai.wowidea.top/api";
     body.easyai_admin_api_key_header = els.easyaiAdminApiKeyHeader.value.trim() || "X-Admin-Access-Key";
     if (els.easyaiAdminKey.value.trim()) body.easyai_admin_api_key = els.easyaiAdminKey.value.trim();
     // 收集动态部门颜色

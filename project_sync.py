@@ -23,6 +23,13 @@ EASYAI_BASE_URL = os.getenv("EASYAI_ADMIN_BASE_URL", "https://ai.wowidea.top").r
 EASYAI_KEY_HEADER = os.getenv("EASYAI_ADMIN_API_KEY_HEADER", "X-Admin-Access-Key").strip()
 
 
+def normalize_base_url(value):
+    base = str(value or "").strip().rstrip("/")
+    if not base:
+        return "https://ai.wowidea.top/api"
+    return base if base.endswith("/api") else f"{base}/api"
+
+
 def _config_key_path():
     return os.getenv("EASYAI_CONFIG_KEY_FILE", os.path.join(os.path.dirname(__file__), ".easyai-config.key"))
 
@@ -68,7 +75,7 @@ def load_easyai_runtime_config(conn=None):
         config.update({row["key"]: row["value"] for row in rows})
     encrypted = config.get("easyai_admin_api_key_encrypted", "")
     return {
-        "base_url": config.get("easyai_admin_base_url") or os.getenv("EASYAI_ADMIN_BASE_URL", "https://ai.wowidea.top"),
+        "base_url": normalize_base_url(config.get("easyai_admin_base_url") or os.getenv("EASYAI_ADMIN_BASE_URL", "https://ai.wowidea.top")),
         "key_header": config.get("easyai_admin_api_key_header") or os.getenv("EASYAI_ADMIN_API_KEY_HEADER", "X-Admin-Access-Key"),
         "api_key": decrypt_secret(encrypted) if encrypted else os.getenv("EASYAI_ADMIN_API_KEY", ""),
     }
@@ -99,7 +106,7 @@ class EasyAIClient:
     def __init__(self, runtime_config=None):
         self.mode = SYNC_MODE
         runtime_config = runtime_config or {}
-        self.base_url = str(runtime_config.get("base_url") or EASYAI_BASE_URL).rstrip("/")
+        self.base_url = normalize_base_url(runtime_config.get("base_url") or EASYAI_BASE_URL)
         self.key_header = str(runtime_config.get("key_header") or EASYAI_KEY_HEADER).strip()
         self.api_key = str(runtime_config.get("api_key") or os.getenv("EASYAI_ADMIN_API_KEY", "")).strip()
         self._mock_users = {}
@@ -113,8 +120,13 @@ class EasyAIClient:
     def _request(self, method, path, **kwargs):
         response = requests.request(method, f"{self.base_url}{path}", headers=self._headers(), timeout=15, **kwargs)
         if not response.ok:
-            raise RuntimeError(f"EasyAI API {response.status_code}: {redact_error(response.text)}")
-        return response.json() if response.content else {}
+            raise RuntimeError(f"EasyAI API {response.status_code} ({response.headers.get('content-type', 'unknown')})")
+        if not response.content:
+            return {}
+        try:
+            return response.json()
+        except ValueError:
+            raise RuntimeError(f"EasyAI API returned non-JSON ({response.status_code}, {response.headers.get('content-type', 'unknown')})")
 
     def list_organizations(self):
         if self.mode == "mock":

@@ -522,7 +522,7 @@ def get_config():
     configured_key = decrypt_secret(encrypted) if encrypted else env_key
     result['easyai_admin_api_key_configured'] = bool(configured_key)
     result['easyai_admin_api_key_masked'] = mask_secret(configured_key)
-    result.setdefault('easyai_admin_base_url', os.getenv('EASYAI_ADMIN_BASE_URL', 'https://ai.wowidea.top'))
+    result.setdefault('easyai_admin_base_url', os.getenv('EASYAI_ADMIN_BASE_URL', 'https://ai.wowidea.top/api'))
     result.setdefault('easyai_admin_api_key_header', os.getenv('EASYAI_ADMIN_API_KEY_HEADER', 'X-Admin-Access-Key'))
     return jsonify(result)
 
