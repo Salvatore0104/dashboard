@@ -2,6 +2,7 @@ import os
 import sqlite3
 import unittest
 from unittest.mock import patch
+from pathlib import Path
 
 os.environ.setdefault("EASYAI_SYNC_MODE", "mock")
 os.environ.setdefault("EASYAI_SYNC_ENABLED", "true")
@@ -117,6 +118,14 @@ class ProjectSyncUnitTests(unittest.TestCase):
             self.assertEqual(client._headers()["Authorization"], "Bearer jwt-value")
             self.assertEqual(client._headers()["Authorization"], "Bearer jwt-value")
             self.assertEqual(login.call_count, 1)
+
+    def test_admin_page_has_independent_login_save_control(self):
+        html = Path(__file__).with_name("static").joinpath("admin.html").read_text(encoding="utf-8")
+        js = Path(__file__).with_name("static").joinpath("admin.js").read_text(encoding="utf-8")
+        self.assertIn('id="saveEasyAIAuthBtn"', html)
+        self.assertIn("保存 wowidea 登录配置", html)
+        self.assertIn("async function saveEasyAIAuthConfig", js)
+        self.assertIn('body = { easyai_admin_username: username }', js)
 
 
 if __name__ == "__main__":

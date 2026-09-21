@@ -71,6 +71,7 @@
     byId("resetConfigBtn").addEventListener("click", resetConfigDefaults);
     byId("testDingTalkBtn").addEventListener("click", testDingTalk);
     byId("testEasyAIKeyBtn").addEventListener("click", testEasyAIConnection);
+    byId("saveEasyAIAuthBtn").addEventListener("click", saveEasyAIAuthConfig);
     byId("editDingBtn").addEventListener("click", enableDingEdit);
     byId("saveDingBtn").addEventListener("click", saveDingConfig);
     els.projectBusinessTrip.addEventListener("change", () => renderBusinessTripPersonPicker(currentTripProject()));
@@ -595,6 +596,27 @@
     closeModal("configModal");
     await loadAll();
     toast("配置已保存");
+  }
+
+  async function saveEasyAIAuthConfig() {
+    const username = els.easyaiAdminUsername.value.trim();
+    const password = els.easyaiAdminPassword.value;
+    if (!username && !password) return toast("请填写 wowidea 管理员账号或密码");
+    const body = { easyai_admin_username: username };
+    if (password) body.easyai_admin_password = password;
+    try {
+      const response = await fetch("api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (!response.ok) throw new Error("保存失败");
+      await loadAll();
+      els.easyaiAdminPassword.value = "";
+      toast("wowidea 登录配置已保存");
+    } catch (error) {
+      toast(error.message || "wowidea 登录配置保存失败");
+    }
   }
 
   async function testEasyAIConnection() {
