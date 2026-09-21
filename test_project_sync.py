@@ -62,6 +62,22 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.assertEqual(result[0]['status'], 'auto_matched')
         self.assertEqual(result[0]['easyai_user_id'], 'easy-1')
 
+    def test_matching_marks_duplicate_and_cross_type_ids_as_conflicts(self):
+        members = [{'id': 'dashboard-1', 'name': '张三', 'ding_id': 'same-id', 'dingtalk_union_id': ''}]
+        users = [{'id': 'easy-1', 'dingtalk_user_id': 'same-id'}, {'id': 'easy-2', 'dingtalk_user_id': 'same-id'}]
+        self.assertEqual(match_identities(self.conn, members, users)[0]['status'], 'conflict')
+        users = [{'id': 'easy-1', 'dingtalk_user_id': 'same-id', 'dingtalk_union_id': 'other'}, {'id': 'easy-2', 'dingtalk_union_id': 'same-id'}]
+        result = match_identities(self.conn, members, users)[0]
+        self.assertEqual(result['status'], 'conflict')
+        self.assertEqual(result['reason'], 'id_type_conflict')
+
+    def test_confirmed_binding_survives_nickname_change(self):
+        self.conn.execute("INSERT INTO external_user_identity (dashboard_user_id, dingtalk_user_id, display_name, normalized_name, easyai_user_id, match_status) VALUES ('dashboard-1', 'ding-1', '张三', '张三', 'easy-1', 'confirmed')")
+        members = [{'id': 'dashboard-1', 'name': '张三（新）', 'ding_id': 'ding-1', 'dingtalk_union_id': ''}]
+        result = match_identities(self.conn, members, [{'id': 'easy-1', 'dingtalk_user_id': 'ding-1'}])[0]
+        self.assertEqual(result['easyai_user_id'], 'easy-1')
+        self.assertTrue(result['name_changed'])
+
     def test_persist_rejects_duplicate_easyai_identity(self):
         matches = [
             {'dashboard_user_id': 'dashboard-1', 'name': '张三', 'dingtalk_user_id': 'ding-1', 'dingtalk_union_id': 'union-1', 'easyai_user_id': 'easy-1', 'status': 'auto_matched', 'match_source': 'userid'},

@@ -4,6 +4,7 @@ import json
 import time
 import queue
 import threading
+import uuid
 from flask import Flask, jsonify, request, send_from_directory, Response, stream_with_context, make_response
 from flask_cors import CORS
 import requests
@@ -340,6 +341,22 @@ def confirm_project_sync_identity(user_id):
         conn.close()
         return jsonify({'success': False, 'message': '该平台用户已绑定其他钉钉身份，已拒绝覆盖'}), 409
     conn.execute('''UPDATE external_user_identity SET easyai_user_id=?, match_status='confirmed', match_source='manual', confirmed_by=?, confirmed_at=?, updated_at=datetime('now') WHERE dashboard_user_id=?''', (easyai_user_id, data.get('operatorId', 'local-admin'), int(time.time() * 1000), user_id))
+    conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, affected_user_ids, result, created_at) VALUES (?, ?, '', 'identity_confirm', ?, 'succeeded', ?)", (str(uuid.uuid4()), data.get('operatorId', 'local-admin'), json.dumps([user_id]), int(time.time() * 1000)))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/project-sync/identities/<user_id>/unbind', methods=['POST'])
+def unbind_project_sync_identity(user_id):
+    data = request.json or {}
+    conn = get_db()
+    current = conn.execute('SELECT dashboard_user_id FROM external_user_identity WHERE dashboard_user_id=?', (user_id,)).fetchone()
+    if not current:
+        conn.close()
+        return jsonify({'success': False, 'message': '找不到身份记录'}), 404
+    conn.execute("UPDATE external_user_identity SET easyai_user_id='', match_status='unmatched', match_source='manual_unbind', match_score=0, confirmed_by=?, confirmed_at=?, updated_at=datetime('now') WHERE dashboard_user_id=?", (data.get('operatorId', 'local-admin'), int(time.time() * 1000), user_id))
+    conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, affected_user_ids, result, created_at) VALUES (?, ?, '', 'identity_unbind', ?, 'succeeded', ?)", (str(uuid.uuid4()), data.get('operatorId', 'local-admin'), json.dumps([user_id]), int(time.time() * 1000)))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
