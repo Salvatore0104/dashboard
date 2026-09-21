@@ -293,6 +293,7 @@ def ensure_tables(conn):
         started_at INTEGER NOT NULL,
         finished_at INTEGER,
         added_count INTEGER DEFAULT 0,
+        existing_count INTEGER DEFAULT 0,
         removed_count INTEGER DEFAULT 0,
         unmatched_count INTEGER DEFAULT 0,
         conflict_count INTEGER DEFAULT 0,
@@ -311,10 +312,24 @@ def ensure_tables(conn):
         error_code TEXT DEFAULT '',
         created_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS project_easyai_member (
+        project_id TEXT NOT NULL,
+        easyai_org_id TEXT NOT NULL,
+        easyai_user_id TEXT NOT NULL,
+        dashboard_user_id TEXT DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'active',
+        first_synced_at INTEGER NOT NULL,
+        last_synced_at INTEGER NOT NULL,
+        PRIMARY KEY (project_id, easyai_user_id)
+    );
     """)
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_external_dingtalk_user ON external_user_identity(dingtalk_user_id) WHERE dingtalk_user_id <> ''")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_external_dingtalk_union ON external_user_identity(dingtalk_union_id) WHERE dingtalk_union_id <> ''")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_external_easyai_user ON external_user_identity(easyai_user_id) WHERE easyai_user_id <> ''")
+    # Keep migrations compatible with databases created before this stage.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(sync_run)").fetchall()}
+    if "existing_count" not in columns:
+        conn.execute("ALTER TABLE sync_run ADD COLUMN existing_count INTEGER DEFAULT 0")
 
 
 def project_members(conn, project_id):
@@ -339,8 +354,17 @@ def _user_id(user):
 def _external_ids(value):
     """Return normalized DingTalk IDs from a dashboard member or EasyAI user."""
     if hasattr(value, "keys"):
-        user_id = value.get("ding_id", value.get("dingtalk_user_id", value.get("dingId", value.get("userid", value.get("userId", "")))))
-        union_id = value.get("dingtalk_union_id", value.get("unionid", value.get("unionId", "")))
+        def field(*names):
+            for name in names:
+                try:
+                    result = value[name]
+                except (KeyError, IndexError):
+                    continue
+                if result:
+                    return result
+            return ""
+        user_id = field("ding_id", "dingtalk_user_id", "dingId", "userid", "userId")
+        union_id = field("dingtalk_union_id", "unionid", "unionId")
     else:
         user_id = union_id = ""
     return str(user_id or "").strip(), str(union_id or "").strip()
@@ -464,7 +488,15 @@ def preview_project(conn, project_id):
         users = [{"id": f"mock-user-{member['id']}", "name": member["name"], "dingtalk_user_id": member["ding_id"], "dingtalk_union_id": member["dingtalk_union_id"]} for member in members if member["ding_id"] or member["dingtalk_union_id"]]
     matches = match_identities(conn, members, users)
     counts = Counter(item["status"] for item in matches)
-    return {"project": dict(project), "binding": dict(binding) if binding else None, "members": matches, "added": counts["auto_matched"], "unmatched": counts["unmatched"], "conflict": counts["conflict"], "removed": 0, "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
+    known = {
+        str(row["easyai_user_id"])
+        for row in conn.execute("SELECT easyai_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (project_id,)).fetchall()
+    }
+    for item in matches:
+        item["membership"] = "existing" if item.get("easyai_user_id") in known else "new"
+    existing = sum(item["status"] in {"auto_matched", "confirmed"} and item["membership"] == "existing" for item in matches)
+    added = sum(item["status"] in {"auto_matched", "confirmed"} and item["membership"] == "new" for item in matches)
+    return {"project": dict(project), "binding": dict(binding) if binding else None, "members": matches, "added": added, "existing": existing, "unmatched": counts["unmatched"], "conflict": counts["conflict"], "removed": 0, "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
 
 
 def sync_project(conn, project_id, trigger="manual", operator_id=""):
@@ -474,7 +506,13 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
     run_id = str(uuid.uuid4())
     idem = f"project-sync:{project_id}:{time.strftime('%Y%m%d%H%M')}"
     started = now_ms()
-    conn.execute("INSERT OR IGNORE INTO sync_run (id, project_id, trigger, status, started_at, idempotency_key) VALUES (?, ?, ?, 'running', ?, ?)", (run_id, project_id, trigger, started, idem))
+    prior = conn.execute("SELECT * FROM sync_run WHERE idempotency_key=?", (idem,)).fetchone()
+    if prior:
+        if prior["status"] == "running":
+            raise RuntimeError("该项目已有同步任务正在运行")
+        details = json.loads(prior["details"] or "{}")
+        return {"success": prior["status"] == "succeeded", "run_id": prior["id"], "idempotent": True, "added": prior["added_count"], "existing": prior["existing_count"], "unmatched": prior["unmatched_count"], "conflict": prior["conflict_count"], "provider": details.get("provider", SYNC_MODE), "simulated": details.get("simulated", SYNC_MODE != "real"), "write_enabled": details.get("write_enabled", SYNC_ENABLED and SYNC_MODE == "real"), "details": details}
+    conn.execute("INSERT INTO sync_run (id, project_id, trigger, status, started_at, idempotency_key) VALUES (?, ?, ?, 'running', ?, ?)", (run_id, project_id, trigger, started, idem))
     try:
         binding = ensure_binding(conn, project_id, project["name"])
         if not binding or not binding.get("easyai_org_id"):
@@ -486,18 +524,27 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
             users = [{"id": f"mock-user-{member['id']}", "name": member["name"], "dingtalk_user_id": member["ding_id"], "dingtalk_union_id": member["dingtalk_union_id"]} for member in members if member["ding_id"] or member["dingtalk_union_id"]]
         matches = match_identities(conn, members, users)
         persisted = persist_identity_matches(conn, matches, operator_id)
+        tracked = {str(row["easyai_user_id"]) for row in conn.execute("SELECT easyai_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (project_id,)).fetchall()}
         matched_ids = [item["easyai_user_id"] for item in persisted if item["easyai_user_id"]]
+        new_ids = [user_id for user_id in matched_ids if str(user_id) not in tracked]
+        existing_count = len(matched_ids) - len(new_ids)
         identity_results = []
         for item in persisted:
             identity_results.append(client.bind_dingtalk_identity(item["easyai_user_id"], item.get("dingtalk_user_id", ""), item.get("dingtalk_union_id", "")) if SYNC_ENABLED else {"user_id": item["easyai_user_id"]})
-        added = client.add_users_to_organization(matched_ids, binding["easyai_org_id"]) if SYNC_ENABLED else {"added": 0}
+        added = client.add_users_to_organization(new_ids, binding["easyai_org_id"]) if SYNC_ENABLED else {"added": len(new_ids)}
+        synced_at = now_ms()
+        for item in persisted:
+            if item["easyai_user_id"]:
+                conn.execute("""INSERT INTO project_easyai_member (project_id, easyai_org_id, easyai_user_id, dashboard_user_id, status, first_synced_at, last_synced_at) VALUES (?, ?, ?, ?, 'active', ?, ?) ON CONFLICT(project_id, easyai_user_id) DO UPDATE SET dashboard_user_id=excluded.dashboard_user_id, status='active', last_synced_at=excluded.last_synced_at""", (project_id, binding["easyai_org_id"], item["easyai_user_id"], item["dashboard_user_id"], synced_at, synced_at))
         unmatched = sum(item["status"] == "unmatched" for item in matches)
         conflicts = sum(item["status"] == "conflict" for item in matches)
         details = {"members": matches, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "identity_bindings": identity_results, "provider_result": added, "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
-        conn.execute("UPDATE sync_run SET status='succeeded', finished_at=?, added_count=?, unmatched_count=?, conflict_count=?, details=? WHERE id=?", (now_ms(), len(matched_ids), unmatched, conflicts, json.dumps(details, ensure_ascii=False), run_id))
+        details["existing"] = existing_count
+        details["new_ids"] = new_ids
+        conn.execute("UPDATE sync_run SET status='succeeded', finished_at=?, added_count=?, existing_count=?, unmatched_count=?, conflict_count=?, details=? WHERE id=?", (now_ms(), len(new_ids), existing_count, unmatched, conflicts, json.dumps(details, ensure_ascii=False), run_id))
         conn.execute("UPDATE project_easyai_binding SET last_sync_at=?, last_error='', updated_at=datetime('now') WHERE project_id=?", (now_ms(), project_id))
         conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, affected_user_ids, result, created_at) VALUES (?, ?, ?, 'project_sync', ?, ?, 'succeeded', ?)", (str(uuid.uuid4()), operator_id, project_id, binding["easyai_org_id"], json.dumps(matched_ids), now_ms()))
-        return {"success": True, "run_id": run_id, "added": len(matched_ids), "unmatched": unmatched, "conflict": conflicts, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "details": details}
+        return {"success": True, "run_id": run_id, "added": len(new_ids), "existing": existing_count, "unmatched": unmatched, "conflict": conflicts, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "details": details}
     except Exception as exc:
         message = redact_error(exc)
         conn.execute("UPDATE sync_run SET status='failed', finished_at=?, error_count=1, details=? WHERE id=?", (now_ms(), json.dumps({"error": message}, ensure_ascii=False), run_id))

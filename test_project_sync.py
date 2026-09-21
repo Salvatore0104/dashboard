@@ -8,7 +8,7 @@ from pathlib import Path
 os.environ.setdefault("EASYAI_SYNC_MODE", "mock")
 os.environ.setdefault("EASYAI_SYNC_ENABLED", "true")
 
-from project_sync import EasyAIClient, encrypt_secret, ensure_tables, load_easyai_runtime_config, match_identities, persist_identity_matches, normalize_name, preview_project, redact_error, test_org_name
+from project_sync import EasyAIClient, encrypt_secret, ensure_tables, load_easyai_runtime_config, match_identities, persist_identity_matches, normalize_name, preview_project, redact_error, sync_project, test_org_name
 
 
 class ProjectSyncUnitTests(unittest.TestCase):
@@ -111,6 +111,28 @@ class ProjectSyncUnitTests(unittest.TestCase):
     def test_bearer_header_preserves_or_adds_prefix(self):
         self.assertEqual(EasyAIClient({"bearer_token": "jwt-value"})._headers()["Authorization"], "Bearer jwt-value")
         self.assertEqual(EasyAIClient({"bearer_token": "Bearer jwt-value"})._headers()["Authorization"], "Bearer jwt-value")
+
+    def test_preview_and_sync_track_new_and_existing_members(self):
+        self.conn.execute("INSERT INTO projects (id, name, start_date, end_date) VALUES ('p-sync', '演示同步', '', '')")
+        self.conn.execute("INSERT INTO persons (id, name, ding_id, dingtalk_union_id) VALUES ('person-1', '张三', 'ding-1', 'union-1')")
+        self.conn.execute("INSERT INTO assignments (id, person_id, project_id, start_date, end_date) VALUES ('a-1', 'person-1', 'p-sync', '', '')")
+        self.conn.execute("INSERT INTO project_easyai_binding (project_id, easyai_org_id, parent_org_id, organization_name, status) VALUES ('p-sync', 'org-1', 'parent-1', '[TEST][dashboard-local] 演示同步', 'active')")
+        preview = preview_project(self.conn, 'p-sync')
+        self.assertEqual(preview['added'], 1)
+        self.assertEqual(preview['existing'], 0)
+        result = sync_project(self.conn, 'p-sync')
+        self.assertEqual(result['added'], 1)
+        self.assertEqual(result['existing'], 0)
+        preview_after = preview_project(self.conn, 'p-sync')
+        self.assertEqual(preview_after['added'], 0)
+        self.assertEqual(preview_after['existing'], 1)
+        repeat = sync_project(self.conn, 'p-sync')
+        self.assertTrue(repeat['idempotent'])
+        self.assertEqual(repeat['added'], 1)
+
+    def test_sync_run_schema_has_existing_count(self):
+        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(sync_run)").fetchall()}
+        self.assertIn('existing_count', columns)
 
     def test_admin_page_has_independent_login_save_control(self):
         html = Path(__file__).with_name("static").joinpath("admin.html").read_text(encoding="utf-8")
