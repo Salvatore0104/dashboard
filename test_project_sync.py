@@ -8,7 +8,7 @@ from pathlib import Path
 os.environ.setdefault("EASYAI_SYNC_MODE", "mock")
 os.environ.setdefault("EASYAI_SYNC_ENABLED", "true")
 
-from project_sync import EasyAIClient, encrypt_secret, ensure_tables, ensure_binding, iter_organizations, load_easyai_runtime_config, match_identities, normalize_name, organization_id, persist_identity_matches, preview_project, redact_error, sync_project, test_org_name
+from project_sync import EasyAIClient, ProjectSyncCoordinator, encrypt_secret, ensure_tables, ensure_binding, iter_organizations, load_easyai_runtime_config, match_identities, normalize_name, organization_id, persist_identity_matches, preview_project, redact_error, sync_project, test_org_name
 
 
 class ProjectSyncUnitTests(unittest.TestCase):
@@ -172,6 +172,37 @@ class ProjectSyncUnitTests(unittest.TestCase):
     def test_sync_run_schema_has_existing_count(self):
         columns = {row[1] for row in self.conn.execute("PRAGMA table_info(sync_run)").fetchall()}
         self.assertIn('existing_count', columns)
+
+    def test_project_sync_coordinator_skips_overlapping_project(self):
+        coordinator = ProjectSyncCoordinator()
+        lock = coordinator._locks['project-1']
+        lock.acquire()
+        try:
+            result = coordinator.run('project-1', lambda: {'success': True})
+            self.assertTrue(result['skipped'])
+            self.assertEqual(result['reason'], 'already_running')
+        finally:
+            lock.release()
+
+    def test_project_sync_coordinator_releases_lock_after_failure(self):
+        coordinator = ProjectSyncCoordinator()
+        with self.assertRaisesRegex(RuntimeError, 'boom'):
+            coordinator.run('project-1', lambda: (_ for _ in ()).throw(RuntimeError('boom')))
+        result = coordinator.run('project-1', lambda: {'success': True})
+        self.assertEqual(result, {'success': True})
+
+    def test_failed_sync_run_is_recorded_for_retry_diagnostics(self):
+        self.conn.execute("INSERT INTO projects (id, name, start_date, end_date) VALUES ('p-fail', '失败项目', '', '')")
+        self.conn.execute("INSERT INTO project_easyai_binding (project_id, easyai_org_id, parent_org_id, organization_name, status) VALUES ('p-fail', 'org-1', 'parent-1', '[TEST][dashboard-local] 失败项目', 'active')")
+        failing = EasyAIClient()
+        failing.list_users = lambda: (_ for _ in ()).throw(RuntimeError('api_key=secret-value'))
+        with patch('project_sync.EasyAIClient', return_value=failing):
+            with self.assertRaises(RuntimeError):
+                sync_project(self.conn, 'p-fail', 'scheduler', 'scheduler')
+        row = self.conn.execute("SELECT status, error_count, details FROM sync_run WHERE project_id='p-fail'").fetchone()
+        self.assertEqual(row['status'], 'failed')
+        self.assertEqual(row['error_count'], 1)
+        self.assertNotIn('secret-value', row['details'])
 
     def test_admin_page_has_independent_login_save_control(self):
         html = Path(__file__).with_name("static").joinpath("admin.html").read_text(encoding="utf-8")

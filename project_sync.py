@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 import uuid
 from collections import Counter, defaultdict
@@ -103,6 +104,22 @@ def normalize_bearer_token(value):
 
 def now_ms():
     return int(time.time() * 1000)
+
+
+class ProjectSyncCoordinator:
+    """Prevent overlapping sync executions for the same project in this process."""
+
+    def __init__(self):
+        self._locks = defaultdict(threading.Lock)
+
+    def run(self, project_id, callback):
+        lock = self._locks[str(project_id)]
+        if not lock.acquire(blocking=False):
+            return {"success": False, "skipped": True, "reason": "already_running"}
+        try:
+            return callback()
+        finally:
+            lock.release()
 
 
 def normalize_name(value):
