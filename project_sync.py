@@ -95,6 +95,21 @@ def load_easyai_runtime_config(conn=None):
     }
 
 
+def migrate_legacy_easyai_password(conn):
+    """Encrypt and remove the pre-encryption password setting."""
+    legacy = conn.execute("SELECT value FROM config WHERE key=?", ('easyai_admin_password',)).fetchone()
+    if not legacy:
+        return False
+    current = conn.execute("SELECT value FROM config WHERE key=?", ('easyai_admin_password_encrypted',)).fetchone()
+    if not current and legacy['value']:
+        conn.execute(
+            'INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)',
+            ('easyai_admin_password_encrypted', encrypt_secret(legacy['value'])),
+        )
+    conn.execute('DELETE FROM config WHERE key=?', ('easyai_admin_password',))
+    return True
+
+
 def now_ms():
     return int(time.time() * 1000)
 

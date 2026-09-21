@@ -4,10 +4,11 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
+
 os.environ.setdefault("EASYAI_SYNC_MODE", "mock")
 os.environ.setdefault("EASYAI_SYNC_ENABLED", "true")
 
-from project_sync import EasyAIClient, encrypt_secret, ensure_tables, load_easyai_runtime_config, match_identities, persist_identity_matches, normalize_name, preview_project, redact_error, test_org_name
+from project_sync import EasyAIClient, encrypt_secret, ensure_tables, load_easyai_runtime_config, match_identities, migrate_legacy_easyai_password, persist_identity_matches, normalize_name, preview_project, redact_error, test_org_name
 
 
 class ProjectSyncUnitTests(unittest.TestCase):
@@ -88,6 +89,14 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.assertEqual(runtime["password"], "secret-value")
         stored = self.conn.execute("SELECT value FROM config WHERE key='easyai_admin_password_encrypted'").fetchone()[0]
         self.assertNotIn("secret-value", stored)
+
+    def test_legacy_plain_password_is_migrated_and_removed(self):
+        self.conn.execute("INSERT INTO config (key, value) VALUES (?, ?)", ("easyai_admin_password", "legacy-pass"))
+        self.assertTrue(migrate_legacy_easyai_password(self.conn))
+        encrypted = self.conn.execute("SELECT value FROM config WHERE key='easyai_admin_password_encrypted'").fetchone()[0]
+        self.assertNotIn("legacy-pass", encrypted)
+        self.assertIsNone(self.conn.execute("SELECT value FROM config WHERE key='easyai_admin_password'").fetchone())
+        self.assertEqual(load_easyai_runtime_config(self.conn)["password"], "legacy-pass")
 
     def test_admin_login_endpoint_settings_are_fixed(self):
         self.conn.executemany(

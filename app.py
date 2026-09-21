@@ -13,10 +13,11 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env.local'), override=False)
 load_dotenv(override=False)
 
-from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, mask_secret, load_easyai_runtime_config, EasyAIClient
+from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, mask_secret, load_easyai_runtime_config, migrate_legacy_easyai_password, EasyAIClient
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
+
 
 PORT = int(os.getenv('PORT', 5000))
 DB_PATH = os.environ.get('DB_PATH', os.path.join(os.path.dirname(__file__), 'claw.db'))
@@ -104,6 +105,7 @@ def init_db():
         value TEXT
     )''')
     ensure_tables(conn)
+    migrate_legacy_easyai_password(conn)
 
     # 数据库迁移：确保现有表有必要的字段
     try:
@@ -522,6 +524,8 @@ def delete_assignment(aid):
 @app.route('/api/config', methods=['GET'])
 def get_config():
     conn = get_db()
+    migrate_legacy_easyai_password(conn)
+    conn.commit()
     rows = conn.execute('SELECT key, value FROM config').fetchall()
     conn.close()
     result = {r['key']: r['value'] for r in rows if not r['key'].startswith('easyai_')}
@@ -554,6 +558,8 @@ def save_config():
         if key == 'easyai_admin_password':
             if str(value or '').strip():
                 conn.execute('INSERT OR REPLACE INTO config (key, value) VALUES (?,?)', ('easyai_admin_password_encrypted', encrypt_secret(str(value))))
+            continue
+        if key == 'easyai_admin_password_encrypted':
             continue
         if key == 'easyai_admin_password_clear':
             if value:
