@@ -136,14 +136,19 @@ class EasyAIClient:
 
     def find_parent_organization(self, name):
         orgs = self.list_organizations()
-        for org in orgs:
-            if str(org.get("name", org.get("org_name", ""))).strip() == name:
-                return org
-        if self.mode == "mock":
-            parent = {"id": "mock-parent-execution-project", "name": name}
-            self._mock_orgs["__parent__"] = parent
-            return parent
-        raise RuntimeError(f"未找到父组织：{name}")
+        matches = [
+            org for org in orgs
+            if str(org.get("name", org.get("org_name", ""))).strip() == name
+        ]
+        if not matches:
+            raise RuntimeError(f"未找到父组织：{name}")
+        if len(matches) > 1:
+            raise RuntimeError(f"父组织名称冲突：{name}（找到 {len(matches)} 个）")
+        parent = matches[0]
+        parent_id = parent.get("id", parent.get("org_id", ""))
+        if not parent_id:
+            raise RuntimeError(f"父组织缺少 ID：{name}")
+        return parent
 
     def create_organization(self, name, parent_id, external_id):
         if self.mode == "mock":
@@ -156,6 +161,18 @@ class EasyAIClient:
         payload = {"name": name, "parent_id": parent_id, "description": f"dashboard project {external_id}", "external_id": str(external_id)}
         data = self._request("POST", "/organization", json=payload)
         return data.get("data", data)
+
+    def update_organization_name(self, org_id, name):
+        if not org_id:
+            raise RuntimeError("组织更新缺少组织 ID")
+        if self.mode == "mock":
+            for org in self._mock_orgs.values():
+                if str(org.get("id")) == str(org_id):
+                    org["name"] = name
+                    return org
+            raise RuntimeError(f"未找到组织：{org_id}")
+        data = self._request("PUT", f"/organization/{org_id}", json={"name": name})
+        return data.get("data", data) if isinstance(data, dict) else data
 
     def list_users(self):
         if self.mode == "mock":
@@ -356,6 +373,39 @@ def ensure_binding(conn, project_id, project_name):
             VALUES (?, ?, 1, 'error', ?, datetime('now'))
             ON CONFLICT(project_id) DO UPDATE SET status='error', last_error=excluded.last_error, updated_at=datetime('now')
         """, (project_id, test_org_name(project_name), message))
+        raise
+
+
+def update_project_binding_name(conn, project_id, project_name):
+    """Keep an existing project organization name aligned with the project."""
+    binding = conn.execute(
+        "SELECT * FROM project_easyai_binding WHERE project_id=?", (project_id,)
+    ).fetchone()
+    if not binding or not binding["easyai_org_id"]:
+        return None
+    organization_name = test_org_name(project_name)
+    if binding["organization_name"] == organization_name:
+        return dict(binding)
+    if not SYNC_ENABLED:
+        conn.execute(
+            "UPDATE project_easyai_binding SET organization_name=?, updated_at=datetime('now') WHERE project_id=?",
+            (organization_name, project_id),
+        )
+        return dict(conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project_id,)).fetchone())
+    client = EasyAIClient(load_easyai_runtime_config(conn))
+    try:
+        client.update_organization_name(binding["easyai_org_id"], organization_name)
+        conn.execute(
+            "UPDATE project_easyai_binding SET organization_name=?, last_error='', updated_at=datetime('now') WHERE project_id=?",
+            (organization_name, project_id),
+        )
+        return dict(conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project_id,)).fetchone())
+    except Exception as exc:
+        message = redact_error(exc)
+        conn.execute(
+            "UPDATE project_easyai_binding SET status='error', last_error=?, updated_at=datetime('now') WHERE project_id=?",
+            (message, project_id),
+        )
         raise
 
 

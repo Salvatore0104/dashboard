@@ -5,7 +5,7 @@ import unittest
 os.environ.setdefault("EASYAI_SYNC_MODE", "mock")
 os.environ.setdefault("EASYAI_SYNC_ENABLED", "true")
 
-from project_sync import ensure_tables, match_identities, persist_identity_matches, normalize_name, redact_error, test_org_name
+from project_sync import EasyAIClient, ensure_tables, match_identities, persist_identity_matches, normalize_name, redact_error, test_org_name
 
 
 class ProjectSyncUnitTests(unittest.TestCase):
@@ -54,6 +54,16 @@ class ProjectSyncUnitTests(unittest.TestCase):
         persist_identity_matches(self.conn, matches[:1])
         with self.assertRaises(sqlite3.IntegrityError):
             persist_identity_matches(self.conn, matches[1:])
+
+    def test_parent_lookup_requires_exactly_one_existing_parent(self):
+        client = EasyAIClient()
+        with self.assertRaisesRegex(RuntimeError, "未找到父组织"):
+            client.find_parent_organization("执行项目组")
+        client._mock_orgs["parent-1"] = {"id": "parent-1", "name": "执行项目组"}
+        self.assertEqual(client.find_parent_organization("执行项目组")["id"], "parent-1")
+        client._mock_orgs["parent-2"] = {"id": "parent-2", "name": "执行项目组"}
+        with self.assertRaisesRegex(RuntimeError, "名称冲突"):
+            client.find_parent_organization("执行项目组")
 
 
 if __name__ == "__main__":

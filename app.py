@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env.local'), override=False)
 load_dotenv(override=False)
 
-from project_sync import ensure_tables, ensure_binding, preview_project, sync_project, redact_error, SYNC_ENABLED, encrypt_secret, decrypt_secret, mask_secret, load_easyai_runtime_config, EasyAIClient
+from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, redact_error, SYNC_ENABLED, encrypt_secret, decrypt_secret, mask_secret, load_easyai_runtime_config, EasyAIClient
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
@@ -242,6 +242,14 @@ def update_project(pid):
         params.append(pid)
         sql = f"UPDATE projects SET {','.join(updates)} WHERE id=?"
         conn.execute(sql, params)
+
+    if 'name' in data:
+        try:
+            update_project_binding_name(conn, pid, data['name'])
+        except Exception as exc:
+            conn.rollback()
+            conn.close()
+            return jsonify({'success': False, 'message': redact_error(exc)}), 400
     
     conn.commit()
     conn.close()
