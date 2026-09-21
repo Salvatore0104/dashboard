@@ -122,6 +122,25 @@ def redact_error(error):
     return text[:500]
 
 
+def organization_id(org):
+    """Read organization IDs from both Mongo-style and legacy responses."""
+    if not isinstance(org, dict):
+        return ""
+    return str(org.get("_id") or org.get("id") or org.get("org_id") or "").strip()
+
+
+def iter_organizations(value):
+    """Flatten the nested organization tree without losing child nodes."""
+    if isinstance(value, dict):
+        children = value.get("children") or []
+        yield value
+        for child in children:
+            yield from iter_organizations(child)
+    elif isinstance(value, list):
+        for item in value:
+            yield from iter_organizations(item)
+
+
 class EasyAIClient:
     def __init__(self, runtime_config=None):
         self.mode = SYNC_MODE
@@ -175,10 +194,14 @@ class EasyAIClient:
         if self.mode == "mock":
             return list(self._mock_orgs.values())
         data = self._request("GET", "/organization")
-        return data if isinstance(data, list) else data.get("data", data.get("organizations", []))
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return data.get("data", data.get("organizations", []))
+        return []
 
     def find_parent_organization(self, name):
-        orgs = self.list_organizations()
+        orgs = list(iter_organizations(self.list_organizations()))
         matches = [
             org for org in orgs
             if str(org.get("name", org.get("org_name", ""))).strip() == name
@@ -188,22 +211,44 @@ class EasyAIClient:
         if len(matches) > 1:
             raise RuntimeError(f"父组织名称冲突：{name}（找到 {len(matches)} 个）")
         parent = matches[0]
-        parent_id = parent.get("id", parent.get("org_id", ""))
+        parent_id = organization_id(parent)
         if not parent_id:
             raise RuntimeError(f"父组织缺少 ID：{name}")
         return parent
+
+    def find_organizations_by_name(self, name):
+        return [org for org in iter_organizations(self.list_organizations()) if str(org.get("name", "")).strip() == str(name).strip()]
 
     def create_organization(self, name, parent_id, external_id):
         if self.mode == "mock":
             key = str(external_id)
             if key in self._mock_orgs:
                 return self._mock_orgs[key]
-            org = {"id": f"mock-org-{hashlib.sha1(key.encode()).hexdigest()[:12]}", "name": name, "parent_id": parent_id, "external_id": key}
+            org = {"_id": f"mock-org-{hashlib.sha1(key.encode()).hexdigest()[:12]}", "name": name, "parent": parent_id, "external_id": key}
             self._mock_orgs[key] = org
             return org
-        payload = {"name": name, "parent_id": parent_id, "description": f"dashboard project {external_id}", "external_id": str(external_id)}
-        data = self._request("POST", "/organization", json=payload)
-        return data.get("data", data)
+        # The deployed OpenAPI DTO uses `parent` and returns Mongo-style `_id`.
+        # Keep the request limited to documented fields; external_id is local.
+        payload = {"name": name, "parent": str(parent_id), "description": f"dashboard project {external_id}"}
+        data = self._request("POST", "/v1/openapi/organization", json=payload)
+        if isinstance(data, dict):
+            body = data.get("data", data)
+            if isinstance(body, dict):
+                return body
+        raise RuntimeError("组织创建响应格式无效")
+
+    def move_organization(self, org_id, parent_id):
+        if not org_id or not parent_id:
+            raise RuntimeError("组织移动缺少组织 ID 或父组织 ID")
+        if self.mode == "mock":
+            for org in self._mock_orgs.values():
+                if organization_id(org) == str(org_id):
+                    org["parent"] = str(parent_id)
+                    return org
+            raise RuntimeError(f"未找到组织：{org_id}")
+        data = self._request("PATCH", f"/v1/openapi/organization/{org_id}", json={"parent": str(parent_id)})
+        body = data.get("data", data) if isinstance(data, dict) else data
+        return body if isinstance(body, dict) else {}
 
     def update_organization_name(self, org_id, name):
         if not org_id:
@@ -275,6 +320,7 @@ def ensure_tables(conn):
         dashboard_user_id TEXT PRIMARY KEY,
         dingtalk_user_id TEXT DEFAULT '',
         dingtalk_union_id TEXT DEFAULT '',
+        dingtalk_open_id TEXT DEFAULT '',
         display_name TEXT DEFAULT '',
         normalized_name TEXT DEFAULT '',
         easyai_user_id TEXT DEFAULT '',
@@ -293,6 +339,7 @@ def ensure_tables(conn):
         started_at INTEGER NOT NULL,
         finished_at INTEGER,
         added_count INTEGER DEFAULT 0,
+        existing_count INTEGER DEFAULT 0,
         removed_count INTEGER DEFAULT 0,
         unmatched_count INTEGER DEFAULT 0,
         conflict_count INTEGER DEFAULT 0,
@@ -311,10 +358,27 @@ def ensure_tables(conn):
         error_code TEXT DEFAULT '',
         created_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS project_easyai_member (
+        project_id TEXT NOT NULL,
+        easyai_org_id TEXT NOT NULL,
+        easyai_user_id TEXT NOT NULL,
+        dashboard_user_id TEXT DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'active',
+        first_synced_at INTEGER NOT NULL,
+        last_synced_at INTEGER NOT NULL,
+        PRIMARY KEY (project_id, easyai_user_id)
+    );
     """)
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_external_dingtalk_user ON external_user_identity(dingtalk_user_id) WHERE dingtalk_user_id <> ''")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_external_dingtalk_union ON external_user_identity(dingtalk_union_id) WHERE dingtalk_union_id <> ''")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_external_easyai_user ON external_user_identity(easyai_user_id) WHERE easyai_user_id <> ''")
+    identity_columns = {row[1] for row in conn.execute("PRAGMA table_info(external_user_identity)").fetchall()}
+    if "dingtalk_open_id" not in identity_columns:
+        conn.execute("ALTER TABLE external_user_identity ADD COLUMN dingtalk_open_id TEXT DEFAULT ''")
+    # Keep migrations compatible with databases created before this stage.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(sync_run)").fetchall()}
+    if "existing_count" not in columns:
+        conn.execute("ALTER TABLE sync_run ADD COLUMN existing_count INTEGER DEFAULT 0")
 
 
 def project_members(conn, project_id):
@@ -339,38 +403,96 @@ def _user_id(user):
 def _external_ids(value):
     """Return normalized DingTalk IDs from a dashboard member or EasyAI user."""
     if hasattr(value, "keys"):
-        user_id = value.get("ding_id", value.get("dingtalk_user_id", value.get("dingId", value.get("userid", value.get("userId", "")))))
-        union_id = value.get("dingtalk_union_id", value.get("unionid", value.get("unionId", "")))
+        def field(*names):
+            for name in names:
+                try:
+                    result = value[name]
+                except (KeyError, IndexError):
+                    continue
+                if result:
+                    return result
+            return ""
+        user_id = field("ding_id", "dingtalk_user_id", "dingId", "userid", "userId", "open_id", "openId")
+        if not user_id:
+            username = str(field("username") or "")
+            if username.startswith("dingtalk_"):
+                user_id = username[len("dingtalk_"):]
+        union_id = field("dingtalk_union_id", "unionid", "unionId", "dt_unionid")
     else:
         user_id = union_id = ""
     return str(user_id or "").strip(), str(union_id or "").strip()
 
 
+def _typed_external_ids(value):
+    """Normalize DingTalk IDs while preserving their provider type."""
+    if not hasattr(value, "keys"):
+        return {}
+    aliases = {
+        "userid": ("ding_id", "dingtalk_user_id", "dingId", "userid", "userId"),
+        "union_id": ("dingtalk_union_id", "unionid", "unionId", "dt_unionid"),
+        "open_id": ("open_id", "openId", "dingtalk_open_id", "openid"),
+    }
+    result = {}
+    for kind, names in aliases.items():
+        for name in names:
+            try:
+                raw = value[name]
+            except (KeyError, IndexError):
+                continue
+            if raw:
+                result[kind] = str(raw).strip()
+                break
+    if "userid" not in result:
+        username = ""
+        try:
+            username = str(value["username"] or "")
+        except (KeyError, IndexError):
+            pass
+        if username.startswith("dingtalk_"):
+            result["userid"] = username[len("dingtalk_"):]
+    return result
+
+
 def match_identities(conn, members, easyai_users):
-    by_dingtalk_id = defaultdict(list)
-    by_union_id = defaultdict(list)
+    by_typed_id = defaultdict(list)
+    by_name = defaultdict(list)
     for user in easyai_users:
-        dingtalk_id, union_id = _external_ids(user)
-        if dingtalk_id:
-            by_dingtalk_id[dingtalk_id].append(user)
-        if union_id:
-            by_union_id[union_id].append(user)
+        for kind, value in _typed_external_ids(user).items():
+            by_typed_id[(kind, value)].append(user)
+        name = normalize_name(user.get("name", user.get("display_name", user.get("nickname", ""))))
+        if name:
+            by_name[name].append(user)
     results = []
     for member in members:
         existing = conn.execute("SELECT * FROM external_user_identity WHERE dashboard_user_id=?", (member["id"],)).fetchone()
         if existing and existing["easyai_user_id"] and existing["match_status"] in {"confirmed", "auto_matched"}:
-            results.append({"dashboard_user_id": member["id"], "name": member["name"], "dingtalk_user_id": existing["dingtalk_user_id"], "dingtalk_union_id": existing["dingtalk_union_id"], "easyai_user_id": existing["easyai_user_id"], "status": existing["match_status"], "match_source": existing["match_source"], "candidate": None})
+            results.append({"dashboard_user_id": member["id"], "name": member["name"], "dingtalk_user_id": existing["dingtalk_user_id"], "dingtalk_union_id": existing["dingtalk_union_id"], "dingtalk_open_id": existing["dingtalk_open_id"] if "dingtalk_open_id" in existing.keys() else "", "easyai_user_id": existing["easyai_user_id"], "status": existing["match_status"], "match_source": existing["match_source"], "candidate": None, "name_changed": normalize_name(member["name"]) != existing["normalized_name"]})
             continue
+        typed_ids = _typed_external_ids(member)
         dingtalk_id, union_id = _external_ids(member)
-        candidates = by_dingtalk_id.get(dingtalk_id, []) if dingtalk_id else []
-        source = "userid" if len(candidates) == 1 else ""
-        if not candidates and union_id:
-            candidates = by_union_id.get(union_id, [])
-            source = "unionid" if len(candidates) == 1 else ""
-        status = "auto_matched" if len(candidates) == 1 else ("conflict" if len(candidates) > 1 else "unmatched")
+        candidates = []
+        source = ""
+        for kind, value in typed_ids.items():
+            matches = by_typed_id.get((kind, value), [])
+            candidates.extend(matches)
+            if len(matches) > 1:
+                source = f"{kind}_duplicate"
+            elif len(matches) == 1 and not source:
+                source = kind
+        candidates = list({_user_id(item): item for item in candidates if _user_id(item)}.values())
+        same_raw_different_type = any(
+            value in typed_ids.values() and sum(1 for (kind, raw) in by_typed_id if raw == value) > 1
+            for value in typed_ids.values()
+        )
+        if not typed_ids:
+            candidates = by_name.get(normalize_name(member["name"]), [])
+            source = "name_unique" if len(candidates) == 1 else ("name_conflict" if len(candidates) > 1 else "")
+            status = "candidate" if len(candidates) == 1 else ("conflict" if len(candidates) > 1 else "unmatched")
+        else:
+            status = "conflict" if same_raw_different_type or len(candidates) > 1 else ("auto_matched" if len(candidates) == 1 else "unmatched")
         candidate = candidates[0] if len(candidates) == 1 else None
-        easy_id = _user_id(candidate) if candidate else ""
-        results.append({"dashboard_user_id": member["id"], "name": member["name"], "dingtalk_user_id": dingtalk_id, "dingtalk_union_id": union_id, "easyai_user_id": easy_id, "status": status, "match_source": source, "candidate": candidate, "reason": "missing_external_id" if not dingtalk_id and not union_id else ""})
+        easy_id = _user_id(candidate) if candidate and status == "auto_matched" else ""
+        results.append({"dashboard_user_id": member["id"], "name": member["name"], "dingtalk_user_id": dingtalk_id, "dingtalk_union_id": union_id, "dingtalk_open_id": typed_ids.get("open_id", ""), "easyai_user_id": easy_id, "status": status, "match_source": source, "candidate": candidate, "reason": "missing_external_id" if not typed_ids else ("id_type_conflict" if same_raw_different_type else "")})
     return results
 
 
@@ -381,10 +503,10 @@ def persist_identity_matches(conn, matches, operator_id=""):
         if item["status"] not in {"auto_matched", "confirmed"} or not item.get("easyai_user_id"):
             continue
         conn.execute("""
-            INSERT INTO external_user_identity (dashboard_user_id, dingtalk_user_id, dingtalk_union_id, display_name, normalized_name, easyai_user_id, match_status, match_source, match_score, confirmed_by, confirmed_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-            ON CONFLICT(dashboard_user_id) DO UPDATE SET dingtalk_user_id=excluded.dingtalk_user_id, dingtalk_union_id=excluded.dingtalk_union_id, display_name=excluded.display_name, normalized_name=excluded.normalized_name, easyai_user_id=excluded.easyai_user_id, match_status=excluded.match_status, match_source=excluded.match_source, match_score=excluded.match_score, confirmed_by=excluded.confirmed_by, confirmed_at=excluded.confirmed_at, updated_at=datetime('now')
-        """, (item["dashboard_user_id"], item.get("dingtalk_user_id", ""), item.get("dingtalk_union_id", ""), item["name"], normalize_name(item["name"]), item["easyai_user_id"], item["status"], item.get("match_source", ""), 1.0, operator_id, now_ms()))
+            INSERT INTO external_user_identity (dashboard_user_id, dingtalk_user_id, dingtalk_union_id, dingtalk_open_id, display_name, normalized_name, easyai_user_id, match_status, match_source, match_score, confirmed_by, confirmed_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(dashboard_user_id) DO UPDATE SET dingtalk_user_id=excluded.dingtalk_user_id, dingtalk_union_id=excluded.dingtalk_union_id, dingtalk_open_id=excluded.dingtalk_open_id, display_name=excluded.display_name, normalized_name=excluded.normalized_name, easyai_user_id=excluded.easyai_user_id, match_status=excluded.match_status, match_source=excluded.match_source, match_score=excluded.match_score, confirmed_by=excluded.confirmed_by, confirmed_at=excluded.confirmed_at, updated_at=datetime('now')
+        """, (item["dashboard_user_id"], item.get("dingtalk_user_id", ""), item.get("dingtalk_union_id", ""), item.get("dingtalk_open_id", ""), item["name"], normalize_name(item["name"]), item["easyai_user_id"], item["status"], item.get("match_source", ""), 1.0, operator_id, now_ms()))
         persisted.append(item)
     return persisted
 
@@ -397,10 +519,16 @@ def ensure_binding(conn, project_id, project_name):
         return dict(existing) if existing else None
     client = EasyAIClient(load_easyai_runtime_config(conn))
     try:
+        organization_name = test_org_name(project_name)
+        # A failed local binding must never claim an online organization by name.
+        # If a same-named test org already exists, require manual inspection.
+        same_name = client.find_organizations_by_name(organization_name)
+        if same_name:
+            raise RuntimeError(f"发现同名测试组织，拒绝自动认领：{organization_name}")
         parent = client.find_parent_organization(PARENT_ORG_NAME)
-        parent_id = parent.get("id", parent.get("org_id", ""))
+        parent_id = organization_id(parent)
         org = client.create_organization(test_org_name(project_name), parent_id, project_id)
-        org_id = org.get("id", org.get("org_id", ""))
+        org_id = organization_id(org)
         if not org_id:
             raise RuntimeError("组织创建响应缺少组织 ID")
         conn.execute("""
@@ -464,7 +592,15 @@ def preview_project(conn, project_id):
         users = [{"id": f"mock-user-{member['id']}", "name": member["name"], "dingtalk_user_id": member["ding_id"], "dingtalk_union_id": member["dingtalk_union_id"]} for member in members if member["ding_id"] or member["dingtalk_union_id"]]
     matches = match_identities(conn, members, users)
     counts = Counter(item["status"] for item in matches)
-    return {"project": dict(project), "binding": dict(binding) if binding else None, "members": matches, "added": counts["auto_matched"], "unmatched": counts["unmatched"], "conflict": counts["conflict"], "removed": 0, "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
+    known = {
+        str(row["easyai_user_id"])
+        for row in conn.execute("SELECT easyai_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (project_id,)).fetchall()
+    }
+    for item in matches:
+        item["membership"] = "existing" if item.get("easyai_user_id") in known else "new"
+    existing = sum(item["status"] in {"auto_matched", "confirmed"} and item["membership"] == "existing" for item in matches)
+    added = sum(item["status"] in {"auto_matched", "confirmed"} and item["membership"] == "new" for item in matches)
+    return {"project": dict(project), "binding": dict(binding) if binding else None, "members": matches, "added": added, "existing": existing, "unmatched": counts["unmatched"], "conflict": counts["conflict"], "removed": 0, "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
 
 
 def sync_project(conn, project_id, trigger="manual", operator_id=""):
@@ -474,7 +610,13 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
     run_id = str(uuid.uuid4())
     idem = f"project-sync:{project_id}:{time.strftime('%Y%m%d%H%M')}"
     started = now_ms()
-    conn.execute("INSERT OR IGNORE INTO sync_run (id, project_id, trigger, status, started_at, idempotency_key) VALUES (?, ?, ?, 'running', ?, ?)", (run_id, project_id, trigger, started, idem))
+    prior = conn.execute("SELECT * FROM sync_run WHERE idempotency_key=?", (idem,)).fetchone()
+    if prior:
+        if prior["status"] == "running":
+            raise RuntimeError("该项目已有同步任务正在运行")
+        details = json.loads(prior["details"] or "{}")
+        return {"success": prior["status"] == "succeeded", "run_id": prior["id"], "idempotent": True, "added": prior["added_count"], "existing": prior["existing_count"], "unmatched": prior["unmatched_count"], "conflict": prior["conflict_count"], "provider": details.get("provider", SYNC_MODE), "simulated": details.get("simulated", SYNC_MODE != "real"), "write_enabled": details.get("write_enabled", SYNC_ENABLED and SYNC_MODE == "real"), "details": details}
+    conn.execute("INSERT INTO sync_run (id, project_id, trigger, status, started_at, idempotency_key) VALUES (?, ?, ?, 'running', ?, ?)", (run_id, project_id, trigger, started, idem))
     try:
         binding = ensure_binding(conn, project_id, project["name"])
         if not binding or not binding.get("easyai_org_id"):
@@ -486,18 +628,30 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
             users = [{"id": f"mock-user-{member['id']}", "name": member["name"], "dingtalk_user_id": member["ding_id"], "dingtalk_union_id": member["dingtalk_union_id"]} for member in members if member["ding_id"] or member["dingtalk_union_id"]]
         matches = match_identities(conn, members, users)
         persisted = persist_identity_matches(conn, matches, operator_id)
+        tracked = {str(row["easyai_user_id"]) for row in conn.execute("SELECT easyai_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (project_id,)).fetchall()}
         matched_ids = [item["easyai_user_id"] for item in persisted if item["easyai_user_id"]]
+        new_ids = [user_id for user_id in matched_ids if str(user_id) not in tracked]
+        existing_count = len(matched_ids) - len(new_ids)
         identity_results = []
         for item in persisted:
-            identity_results.append(client.bind_dingtalk_identity(item["easyai_user_id"], item.get("dingtalk_user_id", ""), item.get("dingtalk_union_id", "")) if SYNC_ENABLED else {"user_id": item["easyai_user_id"]})
-        added = client.add_users_to_organization(matched_ids, binding["easyai_org_id"]) if SYNC_ENABLED else {"added": 0}
+            if SYNC_ENABLED and os.getenv("EASYAI_DINGTALK_BIND_PATH", "").strip():
+                identity_results.append(client.bind_dingtalk_identity(item["easyai_user_id"], item.get("dingtalk_user_id", ""), item.get("dingtalk_union_id", "")))
+            else:
+                identity_results.append({"user_id": item["easyai_user_id"], "status": "local_identity_only"})
+        added = client.add_users_to_organization(new_ids, binding["easyai_org_id"]) if SYNC_ENABLED else {"added": len(new_ids)}
+        synced_at = now_ms()
+        for item in persisted:
+            if item["easyai_user_id"]:
+                conn.execute("""INSERT INTO project_easyai_member (project_id, easyai_org_id, easyai_user_id, dashboard_user_id, status, first_synced_at, last_synced_at) VALUES (?, ?, ?, ?, 'active', ?, ?) ON CONFLICT(project_id, easyai_user_id) DO UPDATE SET dashboard_user_id=excluded.dashboard_user_id, status='active', last_synced_at=excluded.last_synced_at""", (project_id, binding["easyai_org_id"], item["easyai_user_id"], item["dashboard_user_id"], synced_at, synced_at))
         unmatched = sum(item["status"] == "unmatched" for item in matches)
         conflicts = sum(item["status"] == "conflict" for item in matches)
         details = {"members": matches, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "identity_bindings": identity_results, "provider_result": added, "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
-        conn.execute("UPDATE sync_run SET status='succeeded', finished_at=?, added_count=?, unmatched_count=?, conflict_count=?, details=? WHERE id=?", (now_ms(), len(matched_ids), unmatched, conflicts, json.dumps(details, ensure_ascii=False), run_id))
+        details["existing"] = existing_count
+        details["new_ids"] = new_ids
+        conn.execute("UPDATE sync_run SET status='succeeded', finished_at=?, added_count=?, existing_count=?, unmatched_count=?, conflict_count=?, details=? WHERE id=?", (now_ms(), len(new_ids), existing_count, unmatched, conflicts, json.dumps(details, ensure_ascii=False), run_id))
         conn.execute("UPDATE project_easyai_binding SET last_sync_at=?, last_error='', updated_at=datetime('now') WHERE project_id=?", (now_ms(), project_id))
         conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, affected_user_ids, result, created_at) VALUES (?, ?, ?, 'project_sync', ?, ?, 'succeeded', ?)", (str(uuid.uuid4()), operator_id, project_id, binding["easyai_org_id"], json.dumps(matched_ids), now_ms()))
-        return {"success": True, "run_id": run_id, "added": len(matched_ids), "unmatched": unmatched, "conflict": conflicts, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "details": details}
+        return {"success": True, "run_id": run_id, "added": len(new_ids), "existing": existing_count, "unmatched": unmatched, "conflict": conflicts, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "details": details}
     except Exception as exc:
         message = redact_error(exc)
         conn.execute("UPDATE sync_run SET status='failed', finished_at=?, error_count=1, details=? WHERE id=?", (now_ms(), json.dumps({"error": message}, ensure_ascii=False), run_id))

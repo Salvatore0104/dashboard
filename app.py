@@ -273,8 +273,9 @@ def project_sync_status(pid):
     conn = get_db()
     binding = conn.execute('SELECT * FROM project_easyai_binding WHERE project_id=?', (pid,)).fetchone()
     runs = conn.execute('SELECT * FROM sync_run WHERE project_id=? ORDER BY started_at DESC LIMIT 10', (pid,)).fetchall()
+    member_count = conn.execute("SELECT COUNT(*) FROM project_easyai_member WHERE project_id=? AND status='active'", (pid,)).fetchone()[0]
     conn.close()
-    return jsonify({'binding': dict(binding) if binding else None, 'runs': [dict(row) for row in runs], 'enabled': SYNC_ENABLED, 'provider': SYNC_MODE, 'simulated': SYNC_MODE != 'real', 'write_enabled': SYNC_ENABLED and SYNC_MODE == 'real'})
+    return jsonify({'binding': dict(binding) if binding else None, 'runs': [dict(row) for row in runs], 'memberCount': member_count, 'enabled': SYNC_ENABLED, 'provider': SYNC_MODE, 'simulated': SYNC_MODE != 'real', 'write_enabled': SYNC_ENABLED and SYNC_MODE == 'real'})
 
 
 @app.route('/api/project-sync/<pid>/preview', methods=['POST'])

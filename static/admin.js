@@ -167,10 +167,10 @@
     try {
       const preview = await fetchJson(`api/project-sync/${encodeURIComponent(projectId)}/preview`, { method: "POST" });
       if (!preview.success) return toast(preview.message || "无法生成同步预览");
-      const confirmed = confirm(`同步项目“${project.name}”？\n\n唯一 ID 匹配 ${preview.added || 0} 人，待确认 ${preview.unmatched || 0} 人，身份冲突 ${preview.conflict || 0} 人。\n\n只绑定已有平台账号并追加组织关系，不创建账号、不修改登录名、密码、历史数据或已有组织。\n\n本地默认使用 Mock 模式；真实 API 写入必须显式配置绑定接口。`);
+      const confirmed = confirm(`同步项目“${project.name}”？\n\n新增成员 ${preview.added || 0} 人，已在项目组织 ${preview.existing || 0} 人，未匹配 ${preview.unmatched || 0} 人，身份冲突 ${preview.conflict || 0} 人。\n\n只绑定已有平台账号并追加组织关系，不创建账号、不修改登录名、密码、历史数据或已有组织。\n\n本地默认使用 Mock 模式；真实 API 写入必须显式配置绑定接口。`);
       if (!confirmed) return;
       const result = await fetchJson(`api/project-sync/${encodeURIComponent(projectId)}/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trigger: "manual", operatorId: "local-admin" }) });
-      toast(result.success ? (result.simulated ? `模拟同步完成：未写入 wowidea.top；${result.added || 0} 人，未匹配 ${result.unmatched || 0} 人` : `同步完成：${result.added || 0} 人，未匹配 ${result.unmatched || 0} 人`) : (result.message || "同步失败"));
+      toast(result.success ? (result.simulated ? `模拟同步完成：未写入 wowidea.top；新增 ${result.added || 0} 人，已存在 ${result.existing || 0} 人，未匹配 ${result.unmatched || 0} 人` : `同步完成：新增 ${result.added || 0} 人，已存在 ${result.existing || 0} 人，未匹配 ${result.unmatched || 0} 人`) : (result.message || "同步失败"));
       await loadProjectSyncStatuses();
     } catch (error) {
       toast(error.message || "同步失败");
