@@ -84,6 +84,8 @@ def load_easyai_runtime_config(conn=None):
         token = ""
         username = ""
         password = ""
+    if username and password:
+        token = ""
     return {
         "base_url": EASYAI_BASE_URL,
         "bearer_token": normalize_bearer_token(token),

@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env.local'), override=False)
 load_dotenv(override=False)
 
-from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, load_easyai_runtime_config, normalize_bearer_token, EasyAIClient
+from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, load_easyai_runtime_config, normalize_bearer_token, mask_secret, EasyAIClient
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
@@ -565,10 +565,12 @@ def save_config():
         if key == 'easyai_admin_username':
             if str(value or '').strip():
                 conn.execute('INSERT OR REPLACE INTO config (key, value) VALUES (?,?)', ('easyai_admin_username_encrypted', encrypt_secret(str(value).strip())))
+                conn.execute('DELETE FROM config WHERE key=?', ('easyai_admin_bearer_token_encrypted',))
             continue
         if key == 'easyai_admin_password':
             if str(value or ''):
                 conn.execute('INSERT OR REPLACE INTO config (key, value) VALUES (?,?)', ('easyai_admin_password_encrypted', encrypt_secret(str(value))))
+                conn.execute('DELETE FROM config WHERE key=?', ('easyai_admin_bearer_token_encrypted',))
             continue
         if key in {'easyai_admin_api_key', 'easyai_admin_api_key_encrypted', 'easyai_admin_username', 'easyai_admin_password', 'easyai_admin_password_encrypted', 'easyai_auth_path', 'easyai_auth_username_field', 'easyai_auth_password_field', 'easyai_auth_token_field'}:
             continue
