@@ -546,7 +546,6 @@ def get_config():
     env_password = os.getenv('EASYAI_ADMIN_PASSWORD', '')
     configured_password = decrypt_secret(encrypted_password) if encrypted_password else env_password
     result['easyai_admin_password_configured'] = bool(configured_password)
-    result['easyai_admin_password_masked'] = mask_secret(configured_password)
     result['easyai_admin_username'] = next((r['value'] for r in rows if r['key'] == 'easyai_admin_username'), os.getenv('EASYAI_ADMIN_USERNAME', ''))
     return jsonify(result)
 

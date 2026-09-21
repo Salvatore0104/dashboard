@@ -161,6 +161,10 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.assertIn('body = { easyai_admin_username: username }', js)
         self.assertIn('state.config.easyai_admin_password_configured ? "已配置"', js)
 
+    def test_password_mask_is_not_exposed_by_config_response_code(self):
+        app_source = Path(__file__).with_name("app.py").read_text(encoding="utf-8")
+        self.assertNotIn("result['easyai_admin_password_masked']", app_source)
+
 
 if __name__ == "__main__":
     unittest.main()
