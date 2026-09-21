@@ -234,3 +234,31 @@ DINGTALK_APP_SECRET=your_app_secret
 | /api/assignments | GET/POST | 分配列表/创建分配 |
 | /api/config | GET/PUT | 配置获取/更新 |
 | /api/events | GET | SSE 实时事件流 |
+
+## 本地项目组织同步
+
+项目组织同步默认使用安全的 `mock` 模式，不会写入 wowidea.top。复制 `.env.local.example` 为 `.env.local` 后启动：
+
+```powershell
+python -m venv .venv
+.\\.venv\\Scripts\\Activate.ps1
+pip install -r requirements.txt
+python app.py
+```
+
+后台项目列表中的“同步组织”按钮会创建本地测试组织绑定、生成同步预览并记录同步日志。默认定时任务关闭；需要验证 10 分钟调度时设置 `SYNC_SCHEDULER_ENABLED=true`。
+
+真实 API 联调必须先撤销曾在聊天或其他不安全位置暴露的旧 Key，再将新 Key 通过本地环境变量提供，并显式设置 `EASYAI_SYNC_MODE=real`。真实模式会调用线上管理 API，所有组织名称会带 `[TEST][dashboard-local]` 前缀。
+
+后台系统配置也支持填写 wowidea.top 管理 Key。Key 会在后端加密保存，页面只显示末四位脱敏摘要；建议生产环境设置 `EASYAI_CONFIG_ENCRYPTION_KEY`，本地未设置时会生成被 `.gitignore` 忽略的本地加密密钥文件。
+
+新增接口：
+
+- `GET /api/project-sync/:projectId/status`：项目组织绑定和最近运行记录
+- `POST /api/project-sync/:projectId/preview`：生成成员匹配预览
+- `POST /api/project-sync/:projectId/run`：执行一次同步
+- `GET /api/project-sync/runs`：查看同步运行记录
+- `GET /api/project-sync/identities`：查看身份匹配记录
+- `POST /api/project-sync/identities/:userId/confirm`：人工确认 EasyAI 用户关联
+
+项目同步只按钉钉 `userid/unionid` 匹配既有 EasyAI 用户，不再按姓名兜底，也不会创建 EasyAI 账号。预览接口为只读；正式同步会先写入身份映射，再通过追加组织成员接口加入组织，不会替换用户已有组织关系。真实环境还必须显式设置 `EASYAI_DINGTALK_BIND_PATH`（例如部署提供的用户身份绑定接口路径，支持 `{user_id}` 占位符）；未设置时会拒绝写入，避免误调用会自动注册账号的钉钉同步接口。
