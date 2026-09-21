@@ -90,6 +90,15 @@ class ProjectSyncUnitTests(unittest.TestCase):
         stored = self.conn.execute("SELECT value FROM config WHERE key='easyai_admin_password_encrypted'").fetchone()[0]
         self.assertNotIn("secret-value", stored)
 
+    def test_invalid_legacy_key_ciphertext_is_ignored_without_affecting_password(self):
+        self.conn.executemany(
+            "INSERT INTO config (key, value) VALUES (?, ?)",
+            [("easyai_admin_api_key_encrypted", "invalid-old-ciphertext"), ("easyai_admin_password_encrypted", encrypt_secret("valid-password"))],
+        )
+        runtime = load_easyai_runtime_config(self.conn)
+        self.assertEqual(runtime["api_key"], "")
+        self.assertEqual(runtime["password"], "valid-password")
+
     def test_legacy_plain_password_is_migrated_and_removed(self):
         self.conn.execute("INSERT INTO config (key, value) VALUES (?, ?)", ("easyai_admin_password", "legacy-pass"))
         self.assertTrue(migrate_legacy_easyai_password(self.conn))

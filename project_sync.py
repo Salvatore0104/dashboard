@@ -82,6 +82,11 @@ def load_easyai_runtime_config(conn=None):
         rows = conn.execute("SELECT key, value FROM config WHERE key IN ('easyai_admin_base_url', 'easyai_admin_api_key_header', 'easyai_admin_api_key_encrypted', 'easyai_admin_username', 'easyai_admin_password_encrypted', 'easyai_auth_path', 'easyai_auth_username_field', 'easyai_auth_password_field', 'easyai_auth_token_field')").fetchall()
         config.update({row["key"]: row["value"] for row in rows})
     encrypted = config.get("easyai_admin_api_key_encrypted", "")
+    try:
+        if encrypted:
+            decrypt_secret(encrypted)
+    except RuntimeError:
+        pass
     return {
         "base_url": EASYAI_BASE_URL,
         "key_header": EASYAI_KEY_HEADER,

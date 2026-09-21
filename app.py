@@ -531,7 +531,15 @@ def get_config():
     result = {r['key']: r['value'] for r in rows if not r['key'].startswith('easyai_')}
     encrypted = next((r['value'] for r in rows if r['key'] == 'easyai_admin_api_key_encrypted'), '')
     env_key = os.getenv('EASYAI_ADMIN_API_KEY', '')
-    configured_key = decrypt_secret(encrypted) if encrypted else env_key
+    try:
+        configured_key = decrypt_secret(encrypted) if encrypted else env_key
+    except RuntimeError:
+        # An old key encrypted with a different local key must not block login config.
+        configured_key = env_key
+        conn = get_db()
+        conn.execute('DELETE FROM config WHERE key=?', ('easyai_admin_api_key_encrypted',))
+        conn.commit()
+        conn.close()
     result['easyai_admin_api_key_configured'] = bool(configured_key)
     result['easyai_admin_api_key_masked'] = mask_secret(configured_key)
     encrypted_password = next((r['value'] for r in rows if r['key'] == 'easyai_admin_password_encrypted'), '')
