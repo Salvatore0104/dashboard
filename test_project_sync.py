@@ -88,6 +88,17 @@ class ProjectSyncUnitTests(unittest.TestCase):
         stored = self.conn.execute("SELECT value FROM config WHERE key='easyai_admin_password_encrypted'").fetchone()[0]
         self.assertNotIn("secret-value", stored)
 
+    def test_admin_login_endpoint_settings_are_fixed(self):
+        self.conn.executemany(
+            "INSERT INTO config (key, value) VALUES (?, ?)",
+            [("easyai_admin_base_url", "https://example.invalid/api"), ("easyai_auth_path", "/wrong")],
+        )
+        runtime = load_easyai_runtime_config(self.conn)
+        self.assertEqual(runtime["base_url"], "https://wowidea.top/api")
+        self.assertEqual(runtime["auth_path"], "/auth/boss/login")
+        self.assertEqual(runtime["username_field"], "username")
+        self.assertEqual(runtime["password_field"], "password")
+
     def test_auth_token_extraction_supports_nested_response(self):
         client = EasyAIClient()
         self.assertEqual(client._extract_token({"data": {"access_token": "jwt-value"}}), "jwt-value")

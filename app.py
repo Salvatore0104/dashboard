@@ -524,7 +524,7 @@ def get_config():
     conn = get_db()
     rows = conn.execute('SELECT key, value FROM config').fetchall()
     conn.close()
-    result = {r['key']: r['value'] for r in rows if r['key'] not in {'easyai_admin_api_key_encrypted', 'easyai_admin_password_encrypted'}}
+    result = {r['key']: r['value'] for r in rows if not r['key'].startswith('easyai_')}
     encrypted = next((r['value'] for r in rows if r['key'] == 'easyai_admin_api_key_encrypted'), '')
     env_key = os.getenv('EASYAI_ADMIN_API_KEY', '')
     configured_key = decrypt_secret(encrypted) if encrypted else env_key
@@ -535,13 +535,7 @@ def get_config():
     configured_password = decrypt_secret(encrypted_password) if encrypted_password else env_password
     result['easyai_admin_password_configured'] = bool(configured_password)
     result['easyai_admin_password_masked'] = mask_secret(configured_password)
-    result['easyai_admin_username'] = result.get('easyai_admin_username', os.getenv('EASYAI_ADMIN_USERNAME', ''))
-    result.setdefault('easyai_admin_base_url', os.getenv('EASYAI_ADMIN_BASE_URL', 'https://wowidea.top/api'))
-    result.setdefault('easyai_admin_api_key_header', os.getenv('EASYAI_ADMIN_API_KEY_HEADER', 'X-Admin-Access-Key'))
-    result.setdefault('easyai_auth_path', os.getenv('EASYAI_AUTH_PATH', '/auth/boss/login'))
-    result.setdefault('easyai_auth_username_field', os.getenv('EASYAI_AUTH_USERNAME_FIELD', 'username'))
-    result.setdefault('easyai_auth_password_field', os.getenv('EASYAI_AUTH_PASSWORD_FIELD', 'password'))
-    result.setdefault('easyai_auth_token_field', os.getenv('EASYAI_AUTH_TOKEN_FIELD', ''))
+    result['easyai_admin_username'] = next((r['value'] for r in rows if r['key'] == 'easyai_admin_username'), os.getenv('EASYAI_ADMIN_USERNAME', ''))
     return jsonify(result)
 
 @app.route('/api/config', methods=['POST'])

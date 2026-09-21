@@ -21,12 +21,11 @@ TEST_PREFIX = os.getenv("EASYAI_TEST_ORG_PREFIX", "[TEST][dashboard-local]").str
 SYNC_MODE = os.getenv("EASYAI_SYNC_MODE", "mock").strip().lower()
 SYNC_ENABLED = os.getenv("EASYAI_SYNC_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 PARENT_ORG_NAME = os.getenv("EASYAI_PARENT_ORG_NAME", "执行项目组").strip()
-EASYAI_BASE_URL = os.getenv("EASYAI_ADMIN_BASE_URL", "https://wowidea.top/api").rstrip("/")
+EASYAI_BASE_URL = "https://wowidea.top/api"
 EASYAI_KEY_HEADER = os.getenv("EASYAI_ADMIN_API_KEY_HEADER", "X-Admin-Access-Key").strip()
-EASYAI_AUTH_PATH = os.getenv("EASYAI_AUTH_PATH", "/auth/boss/login").strip() or "/auth/boss/login"
-EASYAI_AUTH_USERNAME_FIELD = os.getenv("EASYAI_AUTH_USERNAME_FIELD", "username").strip() or "username"
-EASYAI_AUTH_PASSWORD_FIELD = os.getenv("EASYAI_AUTH_PASSWORD_FIELD", "password").strip() or "password"
-EASYAI_AUTH_TOKEN_FIELD = os.getenv("EASYAI_AUTH_TOKEN_FIELD", "").strip()
+EASYAI_AUTH_PATH = "/auth/boss/login"
+EASYAI_AUTH_USERNAME_FIELD = "username"
+EASYAI_AUTH_PASSWORD_FIELD = "password"
 _AUTH_CACHE = {}
 _AUTH_CACHE_LOCK = threading.Lock()
 
@@ -84,15 +83,15 @@ def load_easyai_runtime_config(conn=None):
         config.update({row["key"]: row["value"] for row in rows})
     encrypted = config.get("easyai_admin_api_key_encrypted", "")
     return {
-        "base_url": normalize_base_url(config.get("easyai_admin_base_url") or os.getenv("EASYAI_ADMIN_BASE_URL", "https://wowidea.top/api")),
-        "key_header": config.get("easyai_admin_api_key_header") or os.getenv("EASYAI_ADMIN_API_KEY_HEADER", "X-Admin-Access-Key"),
-        "api_key": decrypt_secret(encrypted) if encrypted else os.getenv("EASYAI_ADMIN_API_KEY", ""),
+        "base_url": EASYAI_BASE_URL,
+        "key_header": EASYAI_KEY_HEADER,
+        "api_key": os.getenv("EASYAI_ADMIN_API_KEY", ""),
         "username": config.get("easyai_admin_username") or os.getenv("EASYAI_ADMIN_USERNAME", ""),
         "password": decrypt_secret(config.get("easyai_admin_password_encrypted", "")) if config.get("easyai_admin_password_encrypted") else os.getenv("EASYAI_ADMIN_PASSWORD", ""),
-        "auth_path": config.get("easyai_auth_path") or os.getenv("EASYAI_AUTH_PATH", EASYAI_AUTH_PATH),
-        "username_field": config.get("easyai_auth_username_field") or os.getenv("EASYAI_AUTH_USERNAME_FIELD", EASYAI_AUTH_USERNAME_FIELD),
-        "password_field": config.get("easyai_auth_password_field") or os.getenv("EASYAI_AUTH_PASSWORD_FIELD", EASYAI_AUTH_PASSWORD_FIELD),
-        "token_field": config.get("easyai_auth_token_field") or os.getenv("EASYAI_AUTH_TOKEN_FIELD", EASYAI_AUTH_TOKEN_FIELD),
+        "auth_path": EASYAI_AUTH_PATH,
+        "username_field": EASYAI_AUTH_USERNAME_FIELD,
+        "password_field": EASYAI_AUTH_PASSWORD_FIELD,
+        "token_field": "",
     }
 
 
@@ -129,7 +128,7 @@ class EasyAIClient:
         self.auth_path = str(runtime_config.get("auth_path") or EASYAI_AUTH_PATH).strip()
         self.username_field = str(runtime_config.get("username_field") or EASYAI_AUTH_USERNAME_FIELD).strip()
         self.password_field = str(runtime_config.get("password_field") or EASYAI_AUTH_PASSWORD_FIELD).strip()
-        self.token_field = str(runtime_config.get("token_field") or EASYAI_AUTH_TOKEN_FIELD).strip()
+        self.token_field = str(runtime_config.get("token_field") or "").strip()
         self._mock_users = {}
         self._mock_orgs = {}
 
