@@ -460,7 +460,7 @@
     const saveRow = byId("dingSaveRow");
     const savedTag = byId("dingSavedTag");
     if (editBtn) editBtn.style.display = hasDing ? "" : "none";
-    if (saveRow) saveRow.style.display = "none";
+    if (saveRow) saveRow.style.display = hasDing ? "none" : "flex";
     if (savedTag) savedTag.style.display = hasDing ? "inline-flex" : "none";
     if (savedTag) savedTag.className = "tag tag-primary";
 
@@ -551,7 +551,8 @@
     const appKey = els.dingAppKey.value.trim();
     const appSecret = els.dingAppSecret.value.trim();
     if (!appKey || !appSecret) return toast("请填写完整的钉钉 AppKey 和 AppSecret");
-    await fetch("api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ding_appKey: appKey, ding_appSecret: appSecret }) });
+    const response = await fetch("api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ding_appKey: appKey, ding_appSecret: appSecret }) });
+    if (!response.ok) return toast("钉钉配置保存失败");
     // 更新本地 state
     state.config.ding_appKey = appKey;
     state.config.ding_appSecret = appSecret;
@@ -565,11 +566,13 @@
   }
 
   async function saveConfig() {
+    const currentDingAppKey = els.dingAppKey.readOnly ? (state.config.ding_appKey || "") : els.dingAppKey.value.trim();
+    const currentDingAppSecret = els.dingAppSecret.readOnly ? (state.config.ding_appSecret || "") : els.dingAppSecret.value.trim();
     const body = {
       project_title: els.projectTitle.value.trim() || "Claw 项目排期看板",
       default_assign_days: els.defaultAssignDays.value || "1",
-      ding_appKey: state.config.ding_appKey || "",
-      ding_appSecret: state.config.ding_appSecret || "",
+      ding_appKey: currentDingAppKey,
+      ding_appSecret: currentDingAppSecret,
       theme_primary: els.themePrimary.value,
       trip_upcoming_color: els.tripUpcomingColor.value,
       trip_active_color: els.tripActiveColor.value,
