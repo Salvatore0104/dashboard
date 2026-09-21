@@ -408,38 +408,79 @@ def _external_ids(value):
                 if result:
                     return result
             return ""
-        user_id = field("ding_id", "dingtalk_user_id", "dingId", "userid", "userId")
-        union_id = field("dingtalk_union_id", "unionid", "unionId")
+        user_id = field("ding_id", "dingtalk_user_id", "dingId", "userid", "userId", "open_id", "openId")
+        if not user_id:
+            username = str(field("username") or "")
+            if username.startswith("dingtalk_"):
+                user_id = username[len("dingtalk_"):]
+        union_id = field("dingtalk_union_id", "unionid", "unionId", "dt_unionid")
     else:
         user_id = union_id = ""
     return str(user_id or "").strip(), str(union_id or "").strip()
 
 
+def _typed_external_ids(value):
+    """Normalize DingTalk IDs while preserving their provider type."""
+    if not hasattr(value, "keys"):
+        return {}
+    aliases = {
+        "userid": ("ding_id", "dingtalk_user_id", "dingId", "userid", "userId"),
+        "union_id": ("dingtalk_union_id", "unionid", "unionId", "dt_unionid"),
+        "open_id": ("open_id", "openId", "dingtalk_open_id", "openid"),
+    }
+    result = {}
+    for kind, names in aliases.items():
+        for name in names:
+            try:
+                raw = value[name]
+            except (KeyError, IndexError):
+                continue
+            if raw:
+                result[kind] = str(raw).strip()
+                break
+    return result
+
+
 def match_identities(conn, members, easyai_users):
-    by_dingtalk_id = defaultdict(list)
-    by_union_id = defaultdict(list)
+    by_typed_id = defaultdict(list)
+    by_name = defaultdict(list)
     for user in easyai_users:
-        dingtalk_id, union_id = _external_ids(user)
-        if dingtalk_id:
-            by_dingtalk_id[dingtalk_id].append(user)
-        if union_id:
-            by_union_id[union_id].append(user)
+        for kind, value in _typed_external_ids(user).items():
+            by_typed_id[(kind, value)].append(user)
+        name = normalize_name(user.get("name", user.get("display_name", user.get("nickname", ""))))
+        if name:
+            by_name[name].append(user)
     results = []
     for member in members:
         existing = conn.execute("SELECT * FROM external_user_identity WHERE dashboard_user_id=?", (member["id"],)).fetchone()
         if existing and existing["easyai_user_id"] and existing["match_status"] in {"confirmed", "auto_matched"}:
             results.append({"dashboard_user_id": member["id"], "name": member["name"], "dingtalk_user_id": existing["dingtalk_user_id"], "dingtalk_union_id": existing["dingtalk_union_id"], "easyai_user_id": existing["easyai_user_id"], "status": existing["match_status"], "match_source": existing["match_source"], "candidate": None})
             continue
+        typed_ids = _typed_external_ids(member)
         dingtalk_id, union_id = _external_ids(member)
-        candidates = by_dingtalk_id.get(dingtalk_id, []) if dingtalk_id else []
-        source = "userid" if len(candidates) == 1 else ""
-        if not candidates and union_id:
-            candidates = by_union_id.get(union_id, [])
-            source = "unionid" if len(candidates) == 1 else ""
-        status = "auto_matched" if len(candidates) == 1 else ("conflict" if len(candidates) > 1 else "unmatched")
+        candidates = []
+        source = ""
+        for kind, value in typed_ids.items():
+            matches = by_typed_id.get((kind, value), [])
+            candidates.extend(matches)
+            if len(matches) > 1:
+                source = f"{kind}_duplicate"
+            elif len(matches) == 1 and not source:
+                source = kind
+        candidates = list({_user_id(item): item for item in candidates if _user_id(item)}.values())
+        same_raw_different_type = any(
+            value in typed_ids.values() and sum(1 for (kind, raw) in by_typed_id if raw == value) > 1
+            for value in typed_ids.values()
+        )
+        if not typed_ids:
+            candidates = by_name.get(normalize_name(member["name"]), [])
+            source = "name_unique" if len(candidates) == 1 else ("name_conflict" if len(candidates) > 1 else "")
+            status = "candidate" if len(candidates) == 1 else ("conflict" if len(candidates) > 1 else "unmatched")
+        else:
+            status = "conflict" if same_raw_different_type or len(candidates) > 1 else ("auto_matched" if len(candidates) == 1 else "unmatched")
         candidate = candidates[0] if len(candidates) == 1 else None
-        easy_id = _user_id(candidate) if candidate else ""
-        results.append({"dashboard_user_id": member["id"], "name": member["name"], "dingtalk_user_id": dingtalk_id, "dingtalk_union_id": union_id, "easyai_user_id": easy_id, "status": status, "match_source": source, "candidate": candidate, "reason": "missing_external_id" if not dingtalk_id and not union_id else ""})
+        easy_id = _user_id(candidate) if candidate and status == "auto_matched" else ""
+        results.append({"dashboard_user_id": member["id"], "name": member["name"], "dingtalk_user_id": dingtalk_id, "dingtalk_union_id": union_id, "dingtalk_open_id": typed_ids.get("open_id", ""), "easyai_user_id": easy_id, "status": status, "match_source": source, "candidate": candidate, "reason": "missing_external_id" if not typed_ids else ("id_type_conflict" if same_raw_different_type else "")})
     return results
 
 
@@ -581,7 +622,10 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
         existing_count = len(matched_ids) - len(new_ids)
         identity_results = []
         for item in persisted:
-            identity_results.append(client.bind_dingtalk_identity(item["easyai_user_id"], item.get("dingtalk_user_id", ""), item.get("dingtalk_union_id", "")) if SYNC_ENABLED else {"user_id": item["easyai_user_id"]})
+            if SYNC_ENABLED and os.getenv("EASYAI_DINGTALK_BIND_PATH", "").strip():
+                identity_results.append(client.bind_dingtalk_identity(item["easyai_user_id"], item.get("dingtalk_user_id", ""), item.get("dingtalk_union_id", "")))
+            else:
+                identity_results.append({"user_id": item["easyai_user_id"], "status": "local_identity_only"})
         added = client.add_users_to_organization(new_ids, binding["easyai_org_id"]) if SYNC_ENABLED else {"added": len(new_ids)}
         synced_at = now_ms()
         for item in persisted:

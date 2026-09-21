@@ -55,6 +55,13 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.assertEqual(result[1]['reason'], 'missing_external_id')
         self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM external_user_identity').fetchone()[0], 0)
 
+    def test_matching_reads_platform_dingtalk_username_and_unionid(self):
+        members = [{'id': 'dashboard-1', 'name': '张三', 'ding_id': 'ding-1', 'dingtalk_union_id': ''}]
+        users = [{'_id': 'easy-1', 'username': 'dingtalk_ding-1', 'dt_unionid': 'union-1'}]
+        result = match_identities(self.conn, members, users)
+        self.assertEqual(result[0]['status'], 'auto_matched')
+        self.assertEqual(result[0]['easyai_user_id'], 'easy-1')
+
     def test_persist_rejects_duplicate_easyai_identity(self):
         matches = [
             {'dashboard_user_id': 'dashboard-1', 'name': '张三', 'dingtalk_user_id': 'ding-1', 'dingtalk_union_id': 'union-1', 'easyai_user_id': 'easy-1', 'status': 'auto_matched', 'match_source': 'userid'},
