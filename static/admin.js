@@ -45,7 +45,7 @@
       "syncPersonsList", "syncPersonsStatus", "leavePersonName", "leaveType", "leaveStart", "leaveEnd",
       "projectTitle", "defaultAssignDays", "dingAppKey", "dingAppSecret", "dingTestResult",
       "themePrimary", "deptColorGrid", "statusColorGrid", "tripUpcomingColor", "tripActiveColor", "leaveActiveColor", "leaveUpcomingColor", "conflictColor",
-      "easyaiAdminUsername", "easyaiAdminPassword", "easyaiAdminPasswordStatus", "easyaiTestResult"
+      "easyaiAdminBearerToken", "easyaiAdminBearerStatus", "easyaiTestResult"
     ].forEach((id) => els[id] = document.getElementById(id));
   }
 
@@ -71,7 +71,7 @@
     byId("resetConfigBtn").addEventListener("click", resetConfigDefaults);
     byId("testDingTalkBtn").addEventListener("click", testDingTalk);
     byId("testEasyAIKeyBtn").addEventListener("click", testEasyAIConnection);
-    byId("saveEasyAIAuthBtn").addEventListener("click", saveEasyAIAuthConfig);
+    byId("saveEasyAIBearerBtn").addEventListener("click", saveEasyAIBearerConfig);
     byId("editDingBtn").addEventListener("click", enableDingEdit);
     byId("saveDingBtn").addEventListener("click", saveDingConfig);
     els.projectBusinessTrip.addEventListener("change", () => renderBusinessTripPersonPicker(currentTripProject()));
@@ -440,11 +440,10 @@
     els.leaveActiveColor.value = state.config.leave_active_color || "#dc2626";
     els.leaveUpcomingColor.value = state.config.leave_upcoming_color || "#2563eb";
     els.conflictColor.value = state.config.conflict_color || "#dc2626";
-    els.easyaiAdminUsername.value = state.config.easyai_admin_username || "";
-    els.easyaiAdminPassword.value = "";
-    els.easyaiAdminPassword.placeholder = state.config.easyai_admin_password_configured ? "已配置，留空保持不变" : "请输入管理员密码";
-    els.easyaiAdminPasswordStatus.textContent = state.config.easyai_admin_password_configured ? "已配置" : "未配置";
-    els.easyaiAdminPasswordStatus.className = `tag ${state.config.easyai_admin_password_configured ? "tag-primary" : ""}`;
+    els.easyaiAdminBearerToken.value = "";
+    els.easyaiAdminBearerToken.placeholder = state.config.easyai_admin_bearer_token_configured ? "已配置，留空保持不变" : "粘贴 JWT 或 Bearer JWT";
+    els.easyaiAdminBearerStatus.textContent = state.config.easyai_admin_bearer_token_configured ? "已配置" : "未配置";
+    els.easyaiAdminBearerStatus.className = `tag ${state.config.easyai_admin_bearer_token_configured ? "tag-primary" : ""}`;
     els.easyaiTestResult.style.display = "none";
     els.dingTestResult.style.display = "none";
 
@@ -582,8 +581,6 @@
       conflict_color: els.conflictColor.value,
       conflict_opacity: state.config.conflict_opacity || "30"
     };
-    body.easyai_admin_username = els.easyaiAdminUsername.value.trim();
-    if (els.easyaiAdminPassword.value.trim()) body.easyai_admin_password = els.easyaiAdminPassword.value;
     // 收集动态部门颜色
     els.deptColorGrid.querySelectorAll(".dept-color-input").forEach(input => {
       body[input.dataset.key] = input.value;
@@ -591,19 +588,16 @@
     const response = await fetch("api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!response.ok) return toast("配置保存失败");
     const safeBody = { ...body };
-    delete safeBody.easyai_admin_password;
     window.ThemeStore?.save({ ...state.config, ...safeBody });
     closeModal("configModal");
     await loadAll();
     toast("配置已保存");
   }
 
-  async function saveEasyAIAuthConfig() {
-    const username = els.easyaiAdminUsername.value.trim();
-    const password = els.easyaiAdminPassword.value;
-    if (!username && !password) return toast("请填写 wowidea 管理员账号或密码");
-    const body = { easyai_admin_username: username };
-    if (password) body.easyai_admin_password = password;
+  async function saveEasyAIBearerConfig() {
+    const token = els.easyaiAdminBearerToken.value.trim();
+    if (!token) return toast("请填写管理员 Bearer JWT");
+    const body = { easyai_admin_bearer_token: token };
     try {
       const response = await fetch("api/config", {
         method: "POST",
@@ -612,10 +606,10 @@
       });
       if (!response.ok) throw new Error("保存失败");
       await loadAll();
-      els.easyaiAdminPassword.value = "";
-      toast("wowidea 登录配置已保存");
+      els.easyaiAdminBearerToken.value = "";
+      toast("管理员 Bearer JWT 已保存");
     } catch (error) {
-      toast(error.message || "wowidea 登录配置保存失败");
+      toast(error.message || "管理员 Bearer JWT 保存失败");
     }
   }
 
@@ -623,7 +617,7 @@
     els.easyaiTestResult.style.display = "inline-flex";
     els.easyaiTestResult.textContent = "正在测试...";
     try {
-      const data = await fetchJson("api/easyai/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: els.easyaiAdminUsername.value.trim(), password: els.easyaiAdminPassword.value }) });
+      const data = await fetchJson("api/easyai/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bearerToken: els.easyaiAdminBearerToken.value.trim() }) });
       els.easyaiTestResult.textContent = data.message || (data.success ? "连接成功" : "连接失败");
       els.easyaiTestResult.className = `tag ${data.success ? "tag-primary" : "tag-danger"}`;
     } catch (error) {

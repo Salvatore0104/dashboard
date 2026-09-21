@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env.local'), override=False)
 load_dotenv(override=False)
 
-from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, mask_secret, load_easyai_runtime_config, migrate_legacy_easyai_password, EasyAIClient
+from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, load_easyai_runtime_config, normalize_bearer_token, EasyAIClient
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
@@ -105,8 +105,6 @@ def init_db():
         value TEXT
     )''')
     ensure_tables(conn)
-    migrate_legacy_easyai_password(conn)
-
     # 数据库迁移：确保现有表有必要的字段
     try:
         # 检查并添加 persons 表的 leave_type 字段
@@ -524,29 +522,21 @@ def delete_assignment(aid):
 @app.route('/api/config', methods=['GET'])
 def get_config():
     conn = get_db()
-    migrate_legacy_easyai_password(conn)
     conn.commit()
     rows = conn.execute('SELECT key, value FROM config').fetchall()
     conn.close()
     result = {r['key']: r['value'] for r in rows if not r['key'].startswith('easyai_')}
-    encrypted = next((r['value'] for r in rows if r['key'] == 'easyai_admin_api_key_encrypted'), '')
-    env_key = os.getenv('EASYAI_ADMIN_API_KEY', '')
+    encrypted = next((r['value'] for r in rows if r['key'] == 'easyai_admin_bearer_token_encrypted'), '')
+    env_key = os.getenv('EASYAI_ADMIN_BEARER_TOKEN', '')
     try:
         configured_key = decrypt_secret(encrypted) if encrypted else env_key
     except RuntimeError:
-        # An old key encrypted with a different local key must not block login config.
         configured_key = env_key
         conn = get_db()
-        conn.execute('DELETE FROM config WHERE key=?', ('easyai_admin_api_key_encrypted',))
+        conn.execute('DELETE FROM config WHERE key=?', ('easyai_admin_bearer_token_encrypted',))
         conn.commit()
         conn.close()
-    result['easyai_admin_api_key_configured'] = bool(configured_key)
-    result['easyai_admin_api_key_masked'] = mask_secret(configured_key)
-    encrypted_password = next((r['value'] for r in rows if r['key'] == 'easyai_admin_password_encrypted'), '')
-    env_password = os.getenv('EASYAI_ADMIN_PASSWORD', '')
-    configured_password = decrypt_secret(encrypted_password) if encrypted_password else env_password
-    result['easyai_admin_password_configured'] = bool(configured_password)
-    result['easyai_admin_username'] = next((r['value'] for r in rows if r['key'] == 'easyai_admin_username'), os.getenv('EASYAI_ADMIN_USERNAME', ''))
+    result['easyai_admin_bearer_token_configured'] = bool(configured_key)
     return jsonify(result)
 
 @app.route('/api/config', methods=['POST'])
@@ -554,23 +544,15 @@ def save_config():
     data = request.json
     conn = get_db()
     for key, value in data.items():
-        if key == 'easyai_admin_api_key':
+        if key == 'easyai_admin_bearer_token':
             if str(value or '').strip():
-                conn.execute('INSERT OR REPLACE INTO config (key, value) VALUES (?,?)', ("easyai_admin_api_key_encrypted", encrypt_secret(str(value).strip())))
+                conn.execute('INSERT OR REPLACE INTO config (key, value) VALUES (?,?)', ('easyai_admin_bearer_token_encrypted', encrypt_secret(str(value).strip())))
             continue
-        if key == 'easyai_admin_api_key_clear':
+        if key == 'easyai_admin_bearer_token_clear':
             if value:
-                conn.execute('DELETE FROM config WHERE key=?', ('easyai_admin_api_key_encrypted',))
+                conn.execute('DELETE FROM config WHERE key=?', ('easyai_admin_bearer_token_encrypted',))
             continue
-        if key == 'easyai_admin_password':
-            if str(value or '').strip():
-                conn.execute('INSERT OR REPLACE INTO config (key, value) VALUES (?,?)', ('easyai_admin_password_encrypted', encrypt_secret(str(value))))
-            continue
-        if key == 'easyai_admin_password_encrypted':
-            continue
-        if key == 'easyai_admin_password_clear':
-            if value:
-                conn.execute('DELETE FROM config WHERE key=?', ('easyai_admin_password_encrypted',))
+        if key in {'easyai_admin_api_key', 'easyai_admin_api_key_encrypted', 'easyai_admin_username', 'easyai_admin_password', 'easyai_admin_password_encrypted', 'easyai_auth_path', 'easyai_auth_username_field', 'easyai_auth_password_field', 'easyai_auth_token_field'}:
             continue
         conn.execute('INSERT OR REPLACE INTO config (key, value) VALUES (?,?)', (key, str(value)))
     conn.commit()
@@ -585,17 +567,13 @@ def test_easyai_connection():
     conn = get_db()
     try:
         runtime = load_easyai_runtime_config(conn)
-        if str(data.get('apiKey', '')).strip():
-            runtime['api_key'] = str(data['apiKey']).strip()
-        if str(data.get('username', '')).strip():
-            runtime['username'] = str(data['username']).strip()
-        if str(data.get('password', '')):
-            runtime['password'] = str(data['password'])
+        if str(data.get('bearerToken', '')).strip():
+            runtime['bearer_token'] = normalize_bearer_token(str(data['bearerToken']))
         client = EasyAIClient(runtime)
         if client.mode == 'mock':
             return jsonify({'success': True, 'message': 'Mock 配置可用'})
-        if not client.api_key:
-            return jsonify({'success': False, 'message': '尚未配置 wowidea 管理 Key'}), 400
+        if not client.bearer_token:
+            return jsonify({'success': False, 'message': '尚未配置 wowidea 管理员 Bearer JWT'}), 400
         organizations = client.list_organizations()
         return jsonify({'success': True, 'message': f'连接成功，读取到 {len(organizations)} 个组织'})
     except Exception as exc:
