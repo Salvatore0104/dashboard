@@ -216,7 +216,14 @@
         </section>
         <section class="settings-section">
           <h3>wowidea.top 项目组织同步</h3>
-          <div class="field"><label>管理 API 地址</label><input class="input" id="easyaiAdminBaseUrl" type="url" placeholder="https://ai.wowidea.top/api"></div>
+          <div class="field"><label>管理 API 地址</label><input class="input" id="easyaiAdminBaseUrl" type="url" placeholder="https://wowidea.top/api"></div>
+          <div class="field"><label>wowidea 管理员账号</label><input class="input" id="easyaiAdminUsername" type="text" autocomplete="username" placeholder="留空表示使用环境变量或兼容 Key"></div>
+          <div class="field"><label>wowidea 管理员密码</label>
+            <div class="input-row"><input class="input" id="easyaiAdminPassword" type="password" autocomplete="new-password" placeholder="留空保持现有密码"><span class="tag" id="easyaiAdminPasswordStatus">未配置</span></div>
+          </div>
+          <div class="field"><label>登录接口路径</label><input class="input" id="easyaiAuthPath" type="text" placeholder="/auth/boss/login"></div>
+          <div class="field"><label>登录字段</label><div class="input-row"><input class="input" id="easyaiAuthUsernameField" type="text" placeholder="username"><input class="input" id="easyaiAuthPasswordField" type="text" placeholder="password"></div></div>
+          <div class="field"><label>JWT 字段路径（可选）</label><input class="input" id="easyaiAuthTokenField" type="text" placeholder="data.access_token"></div>
           <div class="field"><label>认证请求头</label><input class="input" id="easyaiAdminApiKeyHeader" type="text" placeholder="X-Admin-Access-Key"></div>
           <div class="field"><label>管理员 Key</label>
             <div class="input-row">
@@ -228,7 +235,7 @@
             <button class="btn btn-success" id="testEasyAIKeyBtn" type="button"><span data-icon="refresh"></span>测试 wowidea 连接</button>
             <span class="tag" id="easyaiTestResult" style="display:none"></span>
           </div>
-          <small class="muted">Key 只提交给本地后端保存，页面不会回显完整值。</small>
+          <div class="muted">账号密码只提交给本地后端保存，密码加密存储；页面不会回显密码或 JWT。未配置账号密码时，兼容使用管理员 Key。</div>
         </section>
         <section class="settings-section">
           <h3>部门颜色</h3>

@@ -524,14 +524,24 @@ def get_config():
     conn = get_db()
     rows = conn.execute('SELECT key, value FROM config').fetchall()
     conn.close()
-    result = {r['key']: r['value'] for r in rows if r['key'] != 'easyai_admin_api_key_encrypted'}
+    result = {r['key']: r['value'] for r in rows if r['key'] not in {'easyai_admin_api_key_encrypted', 'easyai_admin_password_encrypted'}}
     encrypted = next((r['value'] for r in rows if r['key'] == 'easyai_admin_api_key_encrypted'), '')
     env_key = os.getenv('EASYAI_ADMIN_API_KEY', '')
     configured_key = decrypt_secret(encrypted) if encrypted else env_key
     result['easyai_admin_api_key_configured'] = bool(configured_key)
     result['easyai_admin_api_key_masked'] = mask_secret(configured_key)
-    result.setdefault('easyai_admin_base_url', os.getenv('EASYAI_ADMIN_BASE_URL', 'https://ai.wowidea.top/api'))
+    encrypted_password = next((r['value'] for r in rows if r['key'] == 'easyai_admin_password_encrypted'), '')
+    env_password = os.getenv('EASYAI_ADMIN_PASSWORD', '')
+    configured_password = decrypt_secret(encrypted_password) if encrypted_password else env_password
+    result['easyai_admin_password_configured'] = bool(configured_password)
+    result['easyai_admin_password_masked'] = mask_secret(configured_password)
+    result['easyai_admin_username'] = result.get('easyai_admin_username', os.getenv('EASYAI_ADMIN_USERNAME', ''))
+    result.setdefault('easyai_admin_base_url', os.getenv('EASYAI_ADMIN_BASE_URL', 'https://wowidea.top/api'))
     result.setdefault('easyai_admin_api_key_header', os.getenv('EASYAI_ADMIN_API_KEY_HEADER', 'X-Admin-Access-Key'))
+    result.setdefault('easyai_auth_path', os.getenv('EASYAI_AUTH_PATH', '/auth/boss/login'))
+    result.setdefault('easyai_auth_username_field', os.getenv('EASYAI_AUTH_USERNAME_FIELD', 'username'))
+    result.setdefault('easyai_auth_password_field', os.getenv('EASYAI_AUTH_PASSWORD_FIELD', 'password'))
+    result.setdefault('easyai_auth_token_field', os.getenv('EASYAI_AUTH_TOKEN_FIELD', ''))
     return jsonify(result)
 
 @app.route('/api/config', methods=['POST'])
@@ -546,6 +556,14 @@ def save_config():
         if key == 'easyai_admin_api_key_clear':
             if value:
                 conn.execute('DELETE FROM config WHERE key=?', ('easyai_admin_api_key_encrypted',))
+            continue
+        if key == 'easyai_admin_password':
+            if str(value or '').strip():
+                conn.execute('INSERT OR REPLACE INTO config (key, value) VALUES (?,?)', ('easyai_admin_password_encrypted', encrypt_secret(str(value))))
+            continue
+        if key == 'easyai_admin_password_clear':
+            if value:
+                conn.execute('DELETE FROM config WHERE key=?', ('easyai_admin_password_encrypted',))
             continue
         conn.execute('INSERT OR REPLACE INTO config (key, value) VALUES (?,?)', (key, str(value)))
     conn.commit()
@@ -562,6 +580,10 @@ def test_easyai_connection():
         runtime = load_easyai_runtime_config(conn)
         if str(data.get('apiKey', '')).strip():
             runtime['api_key'] = str(data['apiKey']).strip()
+        if str(data.get('username', '')).strip():
+            runtime['username'] = str(data['username']).strip()
+        if str(data.get('password', '')):
+            runtime['password'] = str(data['password'])
         client = EasyAIClient(runtime)
         if client.mode == 'mock':
             return jsonify({'success': True, 'message': 'Mock 配置可用'})

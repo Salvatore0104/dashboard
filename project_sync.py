@@ -9,6 +9,8 @@ import os
 import re
 import time
 import uuid
+import base64
+import threading
 from collections import Counter, defaultdict
 
 import requests
@@ -19,14 +21,20 @@ TEST_PREFIX = os.getenv("EASYAI_TEST_ORG_PREFIX", "[TEST][dashboard-local]").str
 SYNC_MODE = os.getenv("EASYAI_SYNC_MODE", "mock").strip().lower()
 SYNC_ENABLED = os.getenv("EASYAI_SYNC_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 PARENT_ORG_NAME = os.getenv("EASYAI_PARENT_ORG_NAME", "执行项目组").strip()
-EASYAI_BASE_URL = os.getenv("EASYAI_ADMIN_BASE_URL", "https://ai.wowidea.top").rstrip("/")
+EASYAI_BASE_URL = os.getenv("EASYAI_ADMIN_BASE_URL", "https://wowidea.top/api").rstrip("/")
 EASYAI_KEY_HEADER = os.getenv("EASYAI_ADMIN_API_KEY_HEADER", "X-Admin-Access-Key").strip()
+EASYAI_AUTH_PATH = os.getenv("EASYAI_AUTH_PATH", "/auth/boss/login").strip() or "/auth/boss/login"
+EASYAI_AUTH_USERNAME_FIELD = os.getenv("EASYAI_AUTH_USERNAME_FIELD", "username").strip() or "username"
+EASYAI_AUTH_PASSWORD_FIELD = os.getenv("EASYAI_AUTH_PASSWORD_FIELD", "password").strip() or "password"
+EASYAI_AUTH_TOKEN_FIELD = os.getenv("EASYAI_AUTH_TOKEN_FIELD", "").strip()
+_AUTH_CACHE = {}
+_AUTH_CACHE_LOCK = threading.Lock()
 
 
 def normalize_base_url(value):
     base = str(value or "").strip().rstrip("/")
     if not base:
-        return "https://ai.wowidea.top/api"
+        return "https://wowidea.top/api"
     return base if base.endswith("/api") else f"{base}/api"
 
 
@@ -40,7 +48,8 @@ def _cipher():
         return Fernet(configured.encode("utf-8"))
     path = _config_key_path()
     if os.path.exists(path):
-        key = open(path, "rb").read().strip()
+        with open(path, "rb") as handle:
+            key = handle.read().strip()
     else:
         key = Fernet.generate_key()
         with open(path, "wb") as handle:
@@ -60,7 +69,7 @@ def decrypt_secret(value):
     try:
         return _cipher().decrypt(str(value).encode("ascii")).decode("utf-8")
     except (InvalidToken, ValueError, UnicodeError):
-        raise RuntimeError("wowidea 管理 Key 解密失败，请检查 EASYAI_CONFIG_ENCRYPTION_KEY")
+        raise RuntimeError("wowidea 管理凭据解密失败，请检查 EASYAI_CONFIG_ENCRYPTION_KEY")
 
 
 def mask_secret(value):
@@ -71,13 +80,19 @@ def mask_secret(value):
 def load_easyai_runtime_config(conn=None):
     config = {}
     if conn is not None:
-        rows = conn.execute("SELECT key, value FROM config WHERE key IN ('easyai_admin_base_url', 'easyai_admin_api_key_header', 'easyai_admin_api_key_encrypted')").fetchall()
+        rows = conn.execute("SELECT key, value FROM config WHERE key IN ('easyai_admin_base_url', 'easyai_admin_api_key_header', 'easyai_admin_api_key_encrypted', 'easyai_admin_username', 'easyai_admin_password_encrypted', 'easyai_auth_path', 'easyai_auth_username_field', 'easyai_auth_password_field', 'easyai_auth_token_field')").fetchall()
         config.update({row["key"]: row["value"] for row in rows})
     encrypted = config.get("easyai_admin_api_key_encrypted", "")
     return {
-        "base_url": normalize_base_url(config.get("easyai_admin_base_url") or os.getenv("EASYAI_ADMIN_BASE_URL", "https://ai.wowidea.top")),
+        "base_url": normalize_base_url(config.get("easyai_admin_base_url") or os.getenv("EASYAI_ADMIN_BASE_URL", "https://wowidea.top/api")),
         "key_header": config.get("easyai_admin_api_key_header") or os.getenv("EASYAI_ADMIN_API_KEY_HEADER", "X-Admin-Access-Key"),
         "api_key": decrypt_secret(encrypted) if encrypted else os.getenv("EASYAI_ADMIN_API_KEY", ""),
+        "username": config.get("easyai_admin_username") or os.getenv("EASYAI_ADMIN_USERNAME", ""),
+        "password": decrypt_secret(config.get("easyai_admin_password_encrypted", "")) if config.get("easyai_admin_password_encrypted") else os.getenv("EASYAI_ADMIN_PASSWORD", ""),
+        "auth_path": config.get("easyai_auth_path") or os.getenv("EASYAI_AUTH_PATH", EASYAI_AUTH_PATH),
+        "username_field": config.get("easyai_auth_username_field") or os.getenv("EASYAI_AUTH_USERNAME_FIELD", EASYAI_AUTH_USERNAME_FIELD),
+        "password_field": config.get("easyai_auth_password_field") or os.getenv("EASYAI_AUTH_PASSWORD_FIELD", EASYAI_AUTH_PASSWORD_FIELD),
+        "token_field": config.get("easyai_auth_token_field") or os.getenv("EASYAI_AUTH_TOKEN_FIELD", EASYAI_AUTH_TOKEN_FIELD),
     }
 
 
@@ -109,13 +124,88 @@ class EasyAIClient:
         self.base_url = normalize_base_url(runtime_config.get("base_url") or EASYAI_BASE_URL)
         self.key_header = str(runtime_config.get("key_header") or EASYAI_KEY_HEADER).strip()
         self.api_key = str(runtime_config.get("api_key") or os.getenv("EASYAI_ADMIN_API_KEY", "")).strip()
+        self.username = str(runtime_config.get("username") or "").strip()
+        self.password = str(runtime_config.get("password") or "")
+        self.auth_path = str(runtime_config.get("auth_path") or EASYAI_AUTH_PATH).strip()
+        self.username_field = str(runtime_config.get("username_field") or EASYAI_AUTH_USERNAME_FIELD).strip()
+        self.password_field = str(runtime_config.get("password_field") or EASYAI_AUTH_PASSWORD_FIELD).strip()
+        self.token_field = str(runtime_config.get("token_field") or EASYAI_AUTH_TOKEN_FIELD).strip()
         self._mock_users = {}
         self._mock_orgs = {}
 
     def _headers(self):
+        if self.username or self.password:
+            if not self.username or not self.password:
+                raise RuntimeError("wowidea 管理员账号或密码未完整配置")
+            return {"Authorization": f"Bearer {self._get_bearer_token()}", "Content-Type": "application/json"}
         if not self.api_key:
-            raise RuntimeError("EASYAI_ADMIN_API_KEY 未配置")
+            raise RuntimeError("wowidea 管理员登录或兼容 Key 未配置")
         return {self.key_header: self.api_key, "Content-Type": "application/json"}
+
+    def _extract_token(self, data):
+        if not isinstance(data, dict):
+            return ""
+        if self.token_field:
+            value = data
+            for part in self.token_field.split("."):
+                if not isinstance(value, dict):
+                    value = None
+                    break
+                value = value.get(part)
+            if value:
+                return str(value)
+        for key in ("access_token", "accessToken", "token", "jwt"):
+            if data.get(key):
+                return str(data[key])
+        for key in ("data", "result", "user"):
+            token = self._extract_token(data.get(key))
+            if token:
+                return token
+        return ""
+
+    @staticmethod
+    def _token_expiry(token, data):
+        expires_in = data.get("expires_in") if isinstance(data, dict) else None
+        if expires_in is None and isinstance(data, dict):
+            expires_in = data.get("expiresIn")
+        try:
+            if expires_in is not None:
+                return time.time() + max(30, float(expires_in))
+        except (TypeError, ValueError):
+            pass
+        try:
+            payload = token.split(".")[1]
+            payload += "=" * (-len(payload) % 4)
+            claims = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
+            if claims.get("exp"):
+                return float(claims["exp"])
+        except (IndexError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+        return time.time() + 300
+
+    def _get_bearer_token(self):
+        cache_key = (self.base_url, self.auth_path, self.username)
+        with _AUTH_CACHE_LOCK:
+            cached = _AUTH_CACHE.get(cache_key)
+            if cached and cached["expires_at"] > time.time() + 30:
+                return cached["token"]
+        payload = {self.username_field: self.username, self.password_field: self.password}
+        try:
+            response = requests.post(f"{self.base_url}{self.auth_path}", json=payload, timeout=15)
+            if not response.ok:
+                raise RuntimeError(f"wowidea 登录失败：HTTP {response.status_code}")
+            data = response.json() if response.content else {}
+            token = self._extract_token(data)
+            if not token:
+                raise RuntimeError("wowidea 登录响应缺少 JWT")
+            expires_at = self._token_expiry(token, data)
+            with _AUTH_CACHE_LOCK:
+                _AUTH_CACHE[cache_key] = {"token": token, "expires_at": expires_at}
+            return token
+        except requests.RequestException as exc:
+            raise RuntimeError(f"wowidea 登录网络错误：{exc.__class__.__name__}")
+        except ValueError:
+            raise RuntimeError("wowidea 登录响应不是 JSON")
 
     def _request(self, method, path, **kwargs):
         response = requests.request(method, f"{self.base_url}{path}", headers=self._headers(), timeout=15, **kwargs)

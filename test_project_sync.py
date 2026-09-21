@@ -1,11 +1,12 @@
 import os
 import sqlite3
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("EASYAI_SYNC_MODE", "mock")
 os.environ.setdefault("EASYAI_SYNC_ENABLED", "true")
 
-from project_sync import EasyAIClient, ensure_tables, match_identities, persist_identity_matches, normalize_name, preview_project, redact_error, test_org_name
+from project_sync import EasyAIClient, encrypt_secret, ensure_tables, load_easyai_runtime_config, match_identities, persist_identity_matches, normalize_name, preview_project, redact_error, test_org_name
 
 
 class ProjectSyncUnitTests(unittest.TestCase):
@@ -77,6 +78,34 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.assertEqual(result["provider"], "mock")
         self.assertTrue(result["simulated"])
         self.assertFalse(result["write_enabled"])
+
+    def test_admin_password_is_loaded_from_encrypted_config(self):
+        self.conn.execute("INSERT INTO config (key, value) VALUES (?, ?)", ("easyai_admin_username", "admin"))
+        self.conn.execute("INSERT INTO config (key, value) VALUES (?, ?)", ("easyai_admin_password_encrypted", encrypt_secret("secret-value")))
+        runtime = load_easyai_runtime_config(self.conn)
+        self.assertEqual(runtime["username"], "admin")
+        self.assertEqual(runtime["password"], "secret-value")
+        stored = self.conn.execute("SELECT value FROM config WHERE key='easyai_admin_password_encrypted'").fetchone()[0]
+        self.assertNotIn("secret-value", stored)
+
+    def test_auth_token_extraction_supports_nested_response(self):
+        client = EasyAIClient()
+        self.assertEqual(client._extract_token({"data": {"access_token": "jwt-value"}}), "jwt-value")
+
+    def test_bearer_login_is_cached(self):
+        class Response:
+            ok = True
+            content = b'{"data":{"access_token":"jwt-value"},"expires_in":300}'
+            status_code = 200
+
+            def json(self):
+                return {"data": {"access_token": "jwt-value"}, "expires_in": 300}
+
+        client = EasyAIClient({"base_url": "https://wowidea.top/api", "username": "admin", "password": "secret"})
+        with patch("project_sync.requests.post", return_value=Response()) as login:
+            self.assertEqual(client._headers()["Authorization"], "Bearer jwt-value")
+            self.assertEqual(client._headers()["Authorization"], "Bearer jwt-value")
+            self.assertEqual(login.call_count, 1)
 
 
 if __name__ == "__main__":

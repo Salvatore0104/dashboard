@@ -45,7 +45,7 @@
       "syncPersonsList", "syncPersonsStatus", "leavePersonName", "leaveType", "leaveStart", "leaveEnd",
       "projectTitle", "defaultAssignDays", "dingAppKey", "dingAppSecret", "dingTestResult",
       "themePrimary", "deptColorGrid", "statusColorGrid", "tripUpcomingColor", "tripActiveColor", "leaveActiveColor", "leaveUpcomingColor", "conflictColor",
-      "easyaiAdminBaseUrl", "easyaiAdminApiKeyHeader", "easyaiAdminKey", "easyaiAdminKeyStatus", "easyaiTestResult"
+      "easyaiAdminBaseUrl", "easyaiAdminUsername", "easyaiAdminPassword", "easyaiAdminPasswordStatus", "easyaiAuthPath", "easyaiAuthUsernameField", "easyaiAuthPasswordField", "easyaiAuthTokenField", "easyaiAdminApiKeyHeader", "easyaiAdminKey", "easyaiAdminKeyStatus", "easyaiTestResult"
     ].forEach((id) => els[id] = document.getElementById(id));
   }
 
@@ -439,7 +439,16 @@
     els.leaveActiveColor.value = state.config.leave_active_color || "#dc2626";
     els.leaveUpcomingColor.value = state.config.leave_upcoming_color || "#2563eb";
     els.conflictColor.value = state.config.conflict_color || "#dc2626";
-    els.easyaiAdminBaseUrl.value = state.config.easyai_admin_base_url || "https://ai.wowidea.top/api";
+    els.easyaiAdminBaseUrl.value = state.config.easyai_admin_base_url || "https://wowidea.top/api";
+    els.easyaiAdminUsername.value = state.config.easyai_admin_username || "";
+    els.easyaiAdminPassword.value = "";
+    els.easyaiAdminPassword.placeholder = state.config.easyai_admin_password_masked ? `已配置 ${state.config.easyai_admin_password_masked}，留空保持不变` : "请输入管理员密码";
+    els.easyaiAdminPasswordStatus.textContent = state.config.easyai_admin_password_configured ? `已配置 ${state.config.easyai_admin_password_masked || ""}` : "未配置";
+    els.easyaiAdminPasswordStatus.className = `tag ${state.config.easyai_admin_password_configured ? "tag-primary" : ""}`;
+    els.easyaiAuthPath.value = state.config.easyai_auth_path || "/auth/boss/login";
+    els.easyaiAuthUsernameField.value = state.config.easyai_auth_username_field || "username";
+    els.easyaiAuthPasswordField.value = state.config.easyai_auth_password_field || "password";
+    els.easyaiAuthTokenField.value = state.config.easyai_auth_token_field || "";
     els.easyaiAdminApiKeyHeader.value = state.config.easyai_admin_api_key_header || "X-Admin-Access-Key";
     els.easyaiAdminKey.value = "";
     els.easyaiAdminKey.placeholder = state.config.easyai_admin_api_key_masked ? `已配置 ${state.config.easyai_admin_api_key_masked}，留空保持不变` : "请输入管理员 Key";
@@ -582,7 +591,13 @@
       conflict_color: els.conflictColor.value,
       conflict_opacity: state.config.conflict_opacity || "30"
     };
-    body.easyai_admin_base_url = els.easyaiAdminBaseUrl.value.trim() || "https://ai.wowidea.top/api";
+    body.easyai_admin_base_url = els.easyaiAdminBaseUrl.value.trim() || "https://wowidea.top/api";
+    body.easyai_admin_username = els.easyaiAdminUsername.value.trim();
+    body.easyai_auth_path = els.easyaiAuthPath.value.trim() || "/auth/boss/login";
+    body.easyai_auth_username_field = els.easyaiAuthUsernameField.value.trim() || "username";
+    body.easyai_auth_password_field = els.easyaiAuthPasswordField.value.trim() || "password";
+    body.easyai_auth_token_field = els.easyaiAuthTokenField.value.trim();
+    if (els.easyaiAdminPassword.value.trim()) body.easyai_admin_password = els.easyaiAdminPassword.value;
     body.easyai_admin_api_key_header = els.easyaiAdminApiKeyHeader.value.trim() || "X-Admin-Access-Key";
     if (els.easyaiAdminKey.value.trim()) body.easyai_admin_api_key = els.easyaiAdminKey.value.trim();
     // 收集动态部门颜色
@@ -601,7 +616,7 @@
     els.easyaiTestResult.style.display = "inline-flex";
     els.easyaiTestResult.textContent = "正在测试...";
     try {
-      const data = await fetchJson("api/easyai/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiKey: els.easyaiAdminKey.value.trim() }) });
+      const data = await fetchJson("api/easyai/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiKey: els.easyaiAdminKey.value.trim(), username: els.easyaiAdminUsername.value.trim(), password: els.easyaiAdminPassword.value }) });
       els.easyaiTestResult.textContent = data.message || (data.success ? "连接成功" : "连接失败");
       els.easyaiTestResult.className = `tag ${data.success ? "tag-primary" : "tag-danger"}`;
     } catch (error) {
