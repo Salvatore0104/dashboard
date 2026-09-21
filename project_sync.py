@@ -320,6 +320,7 @@ def ensure_tables(conn):
         dashboard_user_id TEXT PRIMARY KEY,
         dingtalk_user_id TEXT DEFAULT '',
         dingtalk_union_id TEXT DEFAULT '',
+        dingtalk_open_id TEXT DEFAULT '',
         display_name TEXT DEFAULT '',
         normalized_name TEXT DEFAULT '',
         easyai_user_id TEXT DEFAULT '',
@@ -371,6 +372,9 @@ def ensure_tables(conn):
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_external_dingtalk_user ON external_user_identity(dingtalk_user_id) WHERE dingtalk_user_id <> ''")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_external_dingtalk_union ON external_user_identity(dingtalk_union_id) WHERE dingtalk_union_id <> ''")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_external_easyai_user ON external_user_identity(easyai_user_id) WHERE easyai_user_id <> ''")
+    identity_columns = {row[1] for row in conn.execute("PRAGMA table_info(external_user_identity)").fetchall()}
+    if "dingtalk_open_id" not in identity_columns:
+        conn.execute("ALTER TABLE external_user_identity ADD COLUMN dingtalk_open_id TEXT DEFAULT ''")
     # Keep migrations compatible with databases created before this stage.
     columns = {row[1] for row in conn.execute("PRAGMA table_info(sync_run)").fetchall()}
     if "existing_count" not in columns:
@@ -438,6 +442,14 @@ def _typed_external_ids(value):
             if raw:
                 result[kind] = str(raw).strip()
                 break
+    if "userid" not in result:
+        username = ""
+        try:
+            username = str(value["username"] or "")
+        except (KeyError, IndexError):
+            pass
+        if username.startswith("dingtalk_"):
+            result["userid"] = username[len("dingtalk_"):]
     return result
 
 
@@ -454,7 +466,7 @@ def match_identities(conn, members, easyai_users):
     for member in members:
         existing = conn.execute("SELECT * FROM external_user_identity WHERE dashboard_user_id=?", (member["id"],)).fetchone()
         if existing and existing["easyai_user_id"] and existing["match_status"] in {"confirmed", "auto_matched"}:
-            results.append({"dashboard_user_id": member["id"], "name": member["name"], "dingtalk_user_id": existing["dingtalk_user_id"], "dingtalk_union_id": existing["dingtalk_union_id"], "easyai_user_id": existing["easyai_user_id"], "status": existing["match_status"], "match_source": existing["match_source"], "candidate": None})
+            results.append({"dashboard_user_id": member["id"], "name": member["name"], "dingtalk_user_id": existing["dingtalk_user_id"], "dingtalk_union_id": existing["dingtalk_union_id"], "dingtalk_open_id": existing["dingtalk_open_id"] if "dingtalk_open_id" in existing.keys() else "", "easyai_user_id": existing["easyai_user_id"], "status": existing["match_status"], "match_source": existing["match_source"], "candidate": None, "name_changed": normalize_name(member["name"]) != existing["normalized_name"]})
             continue
         typed_ids = _typed_external_ids(member)
         dingtalk_id, union_id = _external_ids(member)
@@ -491,10 +503,10 @@ def persist_identity_matches(conn, matches, operator_id=""):
         if item["status"] not in {"auto_matched", "confirmed"} or not item.get("easyai_user_id"):
             continue
         conn.execute("""
-            INSERT INTO external_user_identity (dashboard_user_id, dingtalk_user_id, dingtalk_union_id, display_name, normalized_name, easyai_user_id, match_status, match_source, match_score, confirmed_by, confirmed_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-            ON CONFLICT(dashboard_user_id) DO UPDATE SET dingtalk_user_id=excluded.dingtalk_user_id, dingtalk_union_id=excluded.dingtalk_union_id, display_name=excluded.display_name, normalized_name=excluded.normalized_name, easyai_user_id=excluded.easyai_user_id, match_status=excluded.match_status, match_source=excluded.match_source, match_score=excluded.match_score, confirmed_by=excluded.confirmed_by, confirmed_at=excluded.confirmed_at, updated_at=datetime('now')
-        """, (item["dashboard_user_id"], item.get("dingtalk_user_id", ""), item.get("dingtalk_union_id", ""), item["name"], normalize_name(item["name"]), item["easyai_user_id"], item["status"], item.get("match_source", ""), 1.0, operator_id, now_ms()))
+            INSERT INTO external_user_identity (dashboard_user_id, dingtalk_user_id, dingtalk_union_id, dingtalk_open_id, display_name, normalized_name, easyai_user_id, match_status, match_source, match_score, confirmed_by, confirmed_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(dashboard_user_id) DO UPDATE SET dingtalk_user_id=excluded.dingtalk_user_id, dingtalk_union_id=excluded.dingtalk_union_id, dingtalk_open_id=excluded.dingtalk_open_id, display_name=excluded.display_name, normalized_name=excluded.normalized_name, easyai_user_id=excluded.easyai_user_id, match_status=excluded.match_status, match_source=excluded.match_source, match_score=excluded.match_score, confirmed_by=excluded.confirmed_by, confirmed_at=excluded.confirmed_at, updated_at=datetime('now')
+        """, (item["dashboard_user_id"], item.get("dingtalk_user_id", ""), item.get("dingtalk_union_id", ""), item.get("dingtalk_open_id", ""), item["name"], normalize_name(item["name"]), item["easyai_user_id"], item["status"], item.get("match_source", ""), 1.0, operator_id, now_ms()))
         persisted.append(item)
     return persisted
 

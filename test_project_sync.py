@@ -51,7 +51,7 @@ class ProjectSyncUnitTests(unittest.TestCase):
         result = match_identities(self.conn, members, users)
         self.assertEqual(result[0]['status'], 'auto_matched')
         self.assertEqual(result[0]['match_source'], 'userid')
-        self.assertEqual(result[1]['status'], 'unmatched')
+        self.assertEqual(result[1]['status'], 'candidate')
         self.assertEqual(result[1]['reason'], 'missing_external_id')
         self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM external_user_identity').fetchone()[0], 0)
 
