@@ -25,7 +25,8 @@
     syncUsers: [],
     syncDeptFilter: "",
     globalSyncPreview: null,
-    identityByDingId: new Map()
+    identityByDingId: new Map(),
+    confirmAction: null
   };
   const els = {};
 
@@ -44,6 +45,7 @@
       "projectModal", "businessTripModal", "syncPersonsModal", "bindingModal", "leaveModal", "configModal", "toast",
       "globalSyncModal", "globalSyncSummary", "globalSyncBody", "globalSyncPreviewBtn", "globalSyncRunBtn",
       "globalSyncLogsModal", "globalSyncLogsBody",
+      "actionConfirmModal", "actionConfirmTitle", "actionConfirmBody", "actionConfirmBtn",
       "projectModalTitle", "projectName", "projectStart", "projectEnd", "projectColorPicker",
       "btProjectId", "btProjectName", "projectBusinessTrip", "projectBusinessTripStart", "projectBusinessTripEnd", "businessTripPersons",
       "syncPersonsList", "syncPersonsStatus", "leavePersonName", "leaveType", "leaveStart", "leaveEnd",
@@ -65,6 +67,12 @@
     byId("globalSyncLogsBtn").addEventListener("click", openGlobalSyncLogs);
     els.globalSyncPreviewBtn.addEventListener("click", previewGlobalSync);
     els.globalSyncRunBtn.addEventListener("click", runGlobalSync);
+    els.actionConfirmBtn.addEventListener("click", async () => {
+      const action = state.confirmAction;
+      state.confirmAction = null;
+      closeModal("actionConfirmModal");
+      if (action) await action();
+    });
     byId("syncPersonsBtn").addEventListener("click", openSyncPersonsModal);
     byId("bindPersonsBtn").addEventListener("click", openBindingModal);
     byId("configBtn").addEventListener("click", openConfigModal);
@@ -151,12 +159,12 @@
   async function bindAllIdentities() {
     const preview = await fetchJson("api/project-sync/identities/preview", { method: "POST" }).catch((error) => ({ success: false, message: error.message }));
     if (!preview.success) return toast(preview.message || "无法生成身份绑定预览");
-    const confirmed = confirm(`全量身份绑定预览\n\n共 ${preview.total} 人\n新增可绑定 ${preview.bindable} 人\n已有绑定 ${preview.existingBound ?? (preview.matched - preview.bindable)} 人\n昵称候选 ${preview.candidate} 人\n冲突 ${preview.conflict} 人\n未匹配 ${preview.unmatched} 人\n\n确认后只绑定唯一稳定 ID 匹配，不按昵称误绑，不修改 wowidea 原组织。`);
-    if (!confirmed) return;
-    const result = await fetchJson("api/project-sync/identities/bind-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) }).catch((error) => ({ success: false, message: error.message }));
-    if (!result.success) return toast(result.message || "批量绑定失败");
-    toast(`批量绑定完成：新增绑定 ${result.newBound ?? result.bound}，已有绑定 ${result.existingBound ?? 0}，冲突 ${result.conflict}，未匹配 ${result.unmatched}`);
-    await loadIdentities();
+    openActionConfirm("确认批量身份绑定", `全量身份绑定预览\n\n共 ${preview.total} 人\n新增可绑定 ${preview.bindable} 人\n已有绑定 ${preview.existingBound ?? (preview.matched - preview.bindable)} 人\n昵称候选 ${preview.candidate} 人\n冲突 ${preview.conflict} 人\n未匹配 ${preview.unmatched} 人\n\n确认后只绑定唯一稳定 ID 匹配，不按昵称误绑，不修改 wowidea 原组织。`, async () => {
+      const result = await fetchJson("api/project-sync/identities/bind-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) }).catch((error) => ({ success: false, message: error.message }));
+      if (!result.success) return toast(result.message || "批量绑定失败");
+      toast(`批量绑定完成：新增绑定 ${result.newBound ?? result.bound}，已有绑定 ${result.existingBound ?? 0}，冲突 ${result.conflict}，未匹配 ${result.unmatched}`);
+      await loadIdentities();
+    });
   }
 
   function applyThemeConfig() {
@@ -278,20 +286,25 @@
   async function runGlobalSync() {
     if (!state.globalSyncPreview) return previewGlobalSync();
     const totals = state.globalSyncPreview.totals || {};
-    if (!confirm(`确认执行全局同步？\n\n新增组织 ${totals.create_org || 0}，新增成员 ${totals.added || 0}，将移除成员 ${totals.removed || 0}，待处理清理 ${totals.pending_delete || 0}。\n\n系统会按归属和安全校验执行成员移除及符合条件的组织清理。`)) return;
-    els.globalSyncRunBtn.disabled = true;
-    try {
-      const result = await fetchJson("api/project-sync/global/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) });
-      if (!result.success) throw new Error(result.message || "全局同步失败");
-      const t = result.totals || {};
-      toast(`全局同步完成：新增成员 ${t.added || 0}，移除成员 ${t.removed || 0}，失败项目 ${t.failed || 0}，待处理清理 ${t.pending_delete || 0}`);
-      renderGlobalSyncPreview({ projects: result.projects, totals: t });
-      await loadAll();
-    } catch (error) {
-      toast(error.message || "全局同步失败");
-    } finally {
-      els.globalSyncRunBtn.disabled = false;
-    }
+    openActionConfirm("确认执行全局同步", `确认执行全局同步？\n\n新增组织 ${totals.create_org || 0}，新增成员 ${totals.added || 0}，将移除成员 ${totals.removed || 0}，待处理清理 ${totals.pending_delete || 0}。\n\n系统会按归属和安全校验执行成员移除及符合条件的组织清理。`, async () => {
+      els.globalSyncRunBtn.disabled = true;
+      try {
+        const result = await fetchJson("api/project-sync/global/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) });
+        if (!result.success) throw new Error(result.message || "全局同步失败");
+        const t = result.totals || {};
+        toast(`全局同步完成：新增成员 ${t.added || 0}，移除成员 ${t.removed || 0}，失败项目 ${t.failed || 0}，待处理清理 ${t.pending_delete || 0}`);
+        renderGlobalSyncPreview({ projects: result.projects, totals: t });
+        await loadAll();
+      } catch (error) { toast(error.message || "全局同步失败"); }
+      finally { els.globalSyncRunBtn.disabled = false; }
+    });
+  }
+
+  function openActionConfirm(title, body, action) {
+    state.confirmAction = action;
+    els.actionConfirmTitle.textContent = title;
+    els.actionConfirmBody.textContent = body;
+    openModal("actionConfirmModal");
   }
 
   async function openGlobalSyncLogs() {
@@ -1029,6 +1042,7 @@
   }
   function closeModal(id) {
     byId(id).classList.remove("open");
+    if (id === "actionConfirmModal") state.confirmAction = null;
   }
   function toast(message) {
     els.toast.textContent = message;

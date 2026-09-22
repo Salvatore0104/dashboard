@@ -1533,6 +1533,12 @@ td.actions {
   padding: 16px;
 }
 
+.confirm-copy {
+  white-space: pre-line;
+  line-height: 1.65;
+  color: var(--text);
+}
+
 .toast {
   position: fixed;
   right: 18px;
