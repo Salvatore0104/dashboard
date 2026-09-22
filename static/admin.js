@@ -1054,18 +1054,12 @@
 
   async function downloadJsonExport() {
     try {
-      const response = await fetch("api/export");
-      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "dashboard-export.json";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-      toast("JSON 导出已下载");
+      const frame = document.createElement("iframe");
+      frame.hidden = true;
+      frame.src = "api/export";
+      document.body.appendChild(frame);
+      window.setTimeout(() => frame.remove(), 60000);
+      toast("JSON 导出已开始下载");
     } catch (error) { toast(error.message || "JSON 导出失败"); }
   }
   function toast(message) {

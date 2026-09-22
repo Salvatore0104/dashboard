@@ -279,7 +279,9 @@ class ProjectSyncUnitTests(unittest.TestCase):
         js = Path(__file__).with_name("static").joinpath("admin.js").read_text(encoding="utf-8")
         self.assertIn('Content-Disposition"] = \'attachment; filename="dashboard-export.json"\'', app_source)
         self.assertIn('byId("exportJsonBtn").addEventListener("click", downloadJsonExport)', js)
-        self.assertIn('link.download = "dashboard-export.json"', js)
+        self.assertIn('frame.src = "api/export"', js)
+        self.assertIn('JSON 导出已开始下载', js)
+        self.assertNotIn('URL.revokeObjectURL(url)', js)
         self.assertNotIn('location.href = "api/export"', js)
 
 
