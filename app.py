@@ -415,7 +415,10 @@ def preview_project_sync_identities():
     try:
         users = EasyAIClient(load_easyai_runtime_config(conn)).list_users()
         matches = identity_inventory_preview(conn, users)
-        return jsonify({'success': True, 'total': len(matches), 'matched': sum(item['status'] in {'auto_matched', 'confirmed'} for item in matches), 'bindable': sum(item['status'] == 'auto_matched' for item in matches), 'candidate': sum(item['status'] == 'candidate' for item in matches), 'unmatched': sum(item['status'] == 'unmatched' for item in matches), 'conflict': sum(item['status'] == 'conflict' for item in matches)})
+        existing = {str(row['dashboard_user_id']) for row in conn.execute("SELECT dashboard_user_id FROM external_user_identity WHERE easyai_user_id<>'' AND match_status IN ('auto_matched','confirmed')").fetchall()}
+        matched = sum(item['status'] in {'auto_matched', 'confirmed'} for item in matches)
+        bindable = sum(item['status'] == 'auto_matched' and str(item['dashboard_user_id']) not in existing for item in matches)
+        return jsonify({'success': True, 'total': len(matches), 'matched': matched, 'bindable': bindable, 'existingBound': matched - bindable, 'candidate': sum(item['status'] == 'candidate' for item in matches), 'unmatched': sum(item['status'] == 'unmatched' for item in matches), 'conflict': sum(item['status'] == 'conflict' for item in matches)})
     except Exception as exc:
         return jsonify({'success': False, 'message': redact_error(exc)}), 400
     finally:

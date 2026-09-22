@@ -151,7 +151,7 @@
   async function bindAllIdentities() {
     const preview = await fetchJson("api/project-sync/identities/preview", { method: "POST" }).catch((error) => ({ success: false, message: error.message }));
     if (!preview.success) return toast(preview.message || "无法生成身份绑定预览");
-    const confirmed = confirm(`全量身份绑定预览\n\n共 ${preview.total} 人\n可自动绑定 ${preview.bindable} 人\n已绑定 ${preview.matched - preview.bindable} 人\n昵称候选 ${preview.candidate} 人\n冲突 ${preview.conflict} 人\n未匹配 ${preview.unmatched} 人\n\n确认后只绑定唯一稳定 ID 匹配，不按昵称误绑，不修改 wowidea 原组织。`);
+    const confirmed = confirm(`全量身份绑定预览\n\n共 ${preview.total} 人\n新增可绑定 ${preview.bindable} 人\n已有绑定 ${preview.existingBound ?? (preview.matched - preview.bindable)} 人\n昵称候选 ${preview.candidate} 人\n冲突 ${preview.conflict} 人\n未匹配 ${preview.unmatched} 人\n\n确认后只绑定唯一稳定 ID 匹配，不按昵称误绑，不修改 wowidea 原组织。`);
     if (!confirmed) return;
     const result = await fetchJson("api/project-sync/identities/bind-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) }).catch((error) => ({ success: false, message: error.message }));
     if (!result.success) return toast(result.message || "批量绑定失败");
@@ -239,7 +239,7 @@
   }
 
   function openGlobalSyncModal() {
-    els.globalSyncSummary.textContent = "点击“生成预览”读取所有项目组织和成员差异。删除线上组织默认只标记待处理。";
+    els.globalSyncSummary.textContent = "点击“生成预览”读取当前项目组织和成员差异。离开成员将从对应组织移除；符合归属和安全条件的已删除项目组织将执行清理。";
     els.globalSyncBody.innerHTML = `<tr><td colspan="5" class="table-empty">尚未生成预览</td></tr>`;
     els.globalSyncRunBtn.disabled = true;
     openModal("globalSyncModal");
@@ -248,13 +248,13 @@
 
   function renderGlobalSyncPreview(data) {
     const totals = data.totals || {};
-    els.globalSyncSummary.textContent = `项目 ${data.projects?.length || 0} 个：新增组织 ${totals.create_org || 0}，改名 ${totals.rename_org || 0}，新增成员 ${totals.added || 0}，已存在 ${totals.existing || 0}，未匹配 ${totals.unmatched || 0}，冲突 ${totals.conflict || 0}，待处理删除 ${totals.pending_delete || 0}。`;
+    els.globalSyncSummary.textContent = `当前项目 ${data.projects?.length || 0} 个：新增组织 ${totals.create_org || 0}，改名 ${totals.rename_org || 0}，新增成员 ${totals.added || 0}，已存在 ${totals.existing || 0}，待移除成员 ${totals.removed || 0}，未匹配 ${totals.unmatched || 0}，冲突 ${totals.conflict || 0}，待处理清理 ${totals.pending_delete || 0}。`;
     els.globalSyncBody.innerHTML = (data.projects || []).map((item) => {
       const p = item.project || {};
       const org = item.organization_action === "create" ? "待创建" : item.organization_action === "pending_delete" ? "项目已删除" : (item.binding?.organization_name || "已绑定");
       const member = `新增 ${item.added || 0} / 已存在 ${item.existing || 0}`;
       const issues = `冲突 ${item.conflict || 0} / 未匹配 ${item.unmatched || 0}`;
-      const removal = item.organization_action === "pending_delete" ? "仅标记，不删除线上组织" : "离开成员仅标记待移除";
+      const removal = item.organization_action === "pending_delete" ? `项目已删除 · 待清理（成员 ${item.removed || 0}）` : `移除离开成员 ${item.removed || 0} 人`;
       return `<tr><td>${esc(p.name || p.id)}</td><td>${esc(org)}${item.name_action === "rename" ? " · 待改名" : ""}</td><td>${member}</td><td>${issues}</td><td>${removal}</td></tr>`;
     }).join("") || `<tr><td colspan="5" class="table-empty">暂无项目</td></tr>`;
     els.globalSyncRunBtn.disabled = !data.projects?.length;
@@ -278,13 +278,13 @@
   async function runGlobalSync() {
     if (!state.globalSyncPreview) return previewGlobalSync();
     const totals = state.globalSyncPreview.totals || {};
-    if (!confirm(`确认执行全局同步？\n\n新增组织 ${totals.create_org || 0}，新增成员 ${totals.added || 0}，待处理删除 ${totals.pending_delete || 0}。\n\n线上组织不会自动删除，离开成员仅记录待处理。`)) return;
+    if (!confirm(`确认执行全局同步？\n\n新增组织 ${totals.create_org || 0}，新增成员 ${totals.added || 0}，将移除成员 ${totals.removed || 0}，待处理清理 ${totals.pending_delete || 0}。\n\n系统会按归属和安全校验执行成员移除及符合条件的组织清理。`)) return;
     els.globalSyncRunBtn.disabled = true;
     try {
       const result = await fetchJson("api/project-sync/global/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) });
       if (!result.success) throw new Error(result.message || "全局同步失败");
       const t = result.totals || {};
-      toast(`全局同步完成：新增成员 ${t.added || 0}，失败项目 ${t.failed || 0}，待处理删除 ${t.pending_delete || 0}`);
+      toast(`全局同步完成：新增成员 ${t.added || 0}，移除成员 ${t.removed || 0}，失败项目 ${t.failed || 0}，待处理清理 ${t.pending_delete || 0}`);
       renderGlobalSyncPreview({ projects: result.projects, totals: t });
       await loadAll();
     } catch (error) {
@@ -295,15 +295,15 @@
   }
 
   async function openGlobalSyncLogs() {
-    els.globalSyncLogsBody.innerHTML = `<tr><td colspan="7" class="table-empty">读取中</td></tr>`;
+    els.globalSyncLogsBody.innerHTML = `<tr><td colspan="8" class="table-empty">读取中</td></tr>`;
     openModal("globalSyncLogsModal");
     try {
       const rows = await fetchJson("api/project-sync/global/logs");
       els.globalSyncLogsBody.innerHTML = rows.length ? rows.map((row) => {
         const t = row.totals || {};
         const time = row.started_at ? new Date(Number(row.started_at)).toLocaleString() : "-";
-        return `<tr><td>${esc(time)}</td><td>${esc(row.status || "-")}</td><td>${t.added ?? row.added_count ?? 0}</td><td>${t.existing ?? row.existing_count ?? 0}</td><td>${t.unmatched ?? row.unmatched_count ?? 0}</td><td>${t.conflict ?? row.conflict_count ?? 0}</td><td>${t.pending_delete ?? 0}</td></tr>`;
-      }).join("") : `<tr><td colspan="7" class="table-empty">暂无全局同步日志</td></tr>`;
+        return `<tr><td>${esc(time)}</td><td>${esc(row.status || "-")}</td><td>${t.added ?? row.added_count ?? 0}</td><td>${t.existing ?? row.existing_count ?? 0}</td><td>${t.removed ?? row.removed_count ?? 0}</td><td>${t.unmatched ?? row.unmatched_count ?? 0}</td><td>${t.conflict ?? row.conflict_count ?? 0}</td><td>${t.pending_delete ?? 0}</td></tr>`;
+      }).join("") : `<tr><td colspan="8" class="table-empty">暂无全局同步日志</td></tr>`;
     } catch (error) {
       els.globalSyncLogsBody.innerHTML = `<tr><td colspan="7" class="table-empty">${esc(error.message || "读取失败")}</td></tr>`;
     }
