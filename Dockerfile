@@ -1,6 +1,6 @@
 FROM registry.cn-shanghai.aliyuncs.com/easyaigc/sandbox:latest
 
-WORKDIR /app
+WORKDIR /opt/dashboard
 
 # 安装依赖
 COPY requirements.txt .
