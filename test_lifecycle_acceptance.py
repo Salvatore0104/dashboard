@@ -75,9 +75,13 @@ class FakeAdapter:
     def validate_owned_organization(self, org_id, parent_id, external_id, managed_user_ids=None, require_empty=False):
         self.calls.append(("validate", str(org_id), str(parent_id), str(external_id), list(managed_user_ids or []), require_empty))
         org = self.organizations.get(str(org_id))
-        if not org or org["parent"] != str(parent_id) or org["description"] != f"dashboard project {external_id}":
+        if not org or org["parent"] != str(parent_id):
             raise RuntimeError("组织归属或 Dashboard 标记不匹配")
         return org
+
+    def update_organization_description(self, org_id, description):
+        self.calls.append(('description', str(org_id), description))
+        self.organizations.setdefault(str(org_id), {})['description'] = description
 
     def update_organization_name(self, org_id, name):
         self.calls.append(("rename", str(org_id), name))
@@ -168,6 +172,35 @@ class LifecycleAcceptanceTests(unittest.TestCase):
         adds = [c[1] for c in self.fake.calls if c[0] == "add" and c[1]]
         self.assertEqual(adds, [["easy-a"], ["easy-a"]])
 
+    def test_project_date_edit_updates_description(self):
+        self.add_project('p-a')
+        self.conn.commit()
+        response = dashboard_app.app.test_client().put('/api/projects/p-a', json={'startDate':'2026-09-22','endDate':'2026-09-29'})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(self.fake.organizations['org-p-a']['description'],'20260922-20260929')
+
+    def test_project_expiry_clears_members_but_retains_organization(self):
+        self.add_project("p-a")
+        self.add_person_assignment("p-a", end=(date.today() + timedelta(days=7)).isoformat())
+        self.assertEqual(sync_project(self.conn, "p-a")["added"], 1)
+        self.conn.execute("UPDATE projects SET end_date=? WHERE id='p-a'",
+                          ((date.today() - timedelta(days=1)).isoformat(),))
+        self.conn.commit()
+        preview = project_sync.preview_project(self.conn, "p-a")
+        self.assertEqual(preview["removed"], 1)
+        result = sync_all_projects(self.conn)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["projects"][0]["removed"], 1)
+        self.assertFalse(any(call[0] == "delete_org" for call in self.fake.calls))
+        binding = self.conn.execute("SELECT easyai_org_id,status FROM project_easyai_binding WHERE project_id='p-a'").fetchone()
+        self.assertEqual(tuple(binding), ("org-p-a", "active"))
+        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_member WHERE project_id='p-a'").fetchone()[0], "removed")
+        # Repeated scheduled sync must keep the same empty organization.
+        self.assertEqual(sync_project(self.conn, "p-a", "scheduler")["removed"], 0)
+        self.assertFalse(any(call[0] == "delete_org" for call in self.fake.calls))
+        self.conn.execute("UPDATE projects SET end_date=? WHERE id='p-a'", (self.today,))
+        self.assertEqual(sync_project(self.conn, "p-a")["added"], 1)
+
     def test_scheduler_loop_expires_members_and_continues_after_project_failure(self):
         self.add_project("p-a")
         self.add_person_assignment("p-a")
@@ -185,14 +218,16 @@ class LifecycleAcceptanceTests(unittest.TestCase):
             return real_sync(project_conn, project_id, trigger, operator)
 
         # Stop at the next wait: one complete real scheduler loop has executed.
-        with patch.object(dashboard_app.time, "sleep", side_effect=[None, InterruptedError]), \
+        with patch.object(dashboard_app, "PROJECT_SYNC_SCHEDULER_ENABLED", True), \
+             patch.object(dashboard_app.project_sync_wake, "wait", side_effect=[False, InterruptedError]), \
              patch.object(dashboard_app, "sync_project", side_effect=fail_first):
             with self.assertRaises(InterruptedError):
                 dashboard_app.schedule_project_sync()
         row = self.conn.execute("SELECT status,trigger FROM sync_run WHERE project_id='p-b' ORDER BY started_at DESC LIMIT 1").fetchone()
         self.assertEqual(tuple(row), ("succeeded", "scheduler"))
 
-        with patch.object(dashboard_app.time, "sleep", side_effect=[None, InterruptedError]) as sleep:
+        with patch.object(dashboard_app, "PROJECT_SYNC_SCHEDULER_ENABLED", True), \
+             patch.object(dashboard_app.project_sync_wake, "wait", side_effect=[False, InterruptedError]) as sleep:
             with self.assertRaises(InterruptedError):
                 dashboard_app.schedule_project_sync()
         self.assertEqual(sleep.call_args_list[0].args, (dashboard_app.PROJECT_SYNC_INTERVAL_SECONDS,))
@@ -236,21 +271,21 @@ class LifecycleAcceptanceTests(unittest.TestCase):
         self.conn.commit()
         result = dashboard_app.sync_deleted_project("p-a")
         self.assertTrue(result["success"], result)
-        self.assertIn(("delete_org", "org-p-a", "parent", "p-a"), self.fake.calls)
+        self.assertFalse(any(call[0] == 'delete_org' for call in self.fake.calls))
         self.assertNotIn(("delete_org", "org-p-b", "parent", "p-b"), self.fake.calls)
         self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_binding WHERE project_id='p-b'").fetchone()[0], "active")
-        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_binding WHERE project_id='p-a'").fetchone()[0], "deleted")
+        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_binding WHERE project_id='p-a'").fetchone()[0], "retained")
         self.conn.commit()
         followup = sync_all_projects(self.conn, "test")
         self.assertEqual(followup["totals"]["pending_delete"], 0)
-        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_binding WHERE project_id='p-a'").fetchone()[0], "deleted")
+        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_binding WHERE project_id='p-a'").fetchone()[0], "retained")
 
     def test_member_removal_requires_owned_organization_validation_first(self):
         self.add_project("p-a")
         self.add_person_assignment("p-a")
         self.conn.execute("INSERT INTO project_easyai_member (project_id, easyai_org_id, easyai_user_id, dashboard_user_id, status, first_synced_at, last_synced_at) VALUES ('p-a', 'org-p-a', 'easy-a', 'person-a', 'active', 1, 1)")
         self.conn.commit()
-        self.fake.organizations["org-p-a"]["description"] = "untrusted organization"
+        self.fake.organizations["org-p-a"]["parent"] = "untrusted-parent"
         with self.assertRaisesRegex(RuntimeError, "归属"):
             cleanup_deleted_binding(self.conn, "p-a", client=self.fake)
         self.assertFalse(any(call[0] == "remove" for call in self.fake.calls))
@@ -309,6 +344,90 @@ class LifecycleAcceptanceTests(unittest.TestCase):
         normalized = _batch_result({}, ["easy-a"], "add")
         self.assertEqual(normalized["success_ids"], [])
         self.assertTrue(normalized["partial"])
+
+    def test_consistency_checks_live_members_name_parent_and_orphans(self):
+        self.add_project("p-a", "Project A")
+        self.add_person_assignment("p-a")
+        self.conn.execute("INSERT INTO external_user_identity (dashboard_user_id,easyai_user_id,match_status) VALUES ('person-a','easy-a','confirmed')")
+        self.conn.commit()
+        remote = [{"id": "parent", "name": project_sync.PARENT_ORG_NAME},
+                  {"id": "org-p-a", "name": "Project A", "parent": "parent", "users": [{"id": "easy-a"}], "userCount": 1}]
+        with patch.object(self.fake, "list_organizations", return_value=remote, create=True):
+            self.assertEqual(project_sync.organization_consistency(self.conn)["state"], "consistent")
+            remote[1]["users"] = []; remote[1]["userCount"] = 0
+            self.assertEqual(project_sync.organization_consistency(self.conn)["state"], "different")
+            remote[1]["users"] = [{"id": "easy-a"}]; remote[1]["userCount"] = 1
+            remote[1]["name"] = "wrong"
+            self.assertEqual(project_sync.organization_consistency(self.conn)["state"], "different")
+            remote[1]["name"] = "Project A"; remote[1]["parent"] = "wrong"
+            self.assertEqual(project_sync.organization_consistency(self.conn)["state"], "different")
+            remote[1]["parent"] = "parent"
+            self.conn.execute("UPDATE external_user_identity SET match_status='unmatched'")
+            self.assertEqual(project_sync.organization_consistency(self.conn)["state"], "different")
+            self.conn.execute("UPDATE external_user_identity SET match_status='confirmed'")
+            self.conn.execute("INSERT INTO project_easyai_binding (project_id,easyai_org_id,organization_name,status) VALUES ('deleted-project','orphan-org','Deleted','pending_delete')")
+            remote.append({"id":"orphan-org"})
+            self.assertEqual(project_sync.organization_consistency(self.conn)["pendingCleanup"], 1)
+            remote.pop()
+            del remote[1]["users"]
+            with self.assertRaises(RuntimeError):
+                project_sync.organization_consistency(self.conn)
+
+    def test_private_config_and_server_side_dingtalk_credentials(self):
+        self.conn.executemany('INSERT INTO config (key,value) VALUES (?,?)', [('ding_appKey','test-key'),('ding_appSecret','test-secret'),
+            ('easyai_admin_username_encrypted',project_sync.encrypt_secret('test-admin')),
+            ('easyai_admin_password_encrypted',project_sync.encrypt_secret('test-password'))])
+        self.conn.commit()
+        client = dashboard_app.app.test_client()
+        data = client.get('/api/config').json
+        self.assertTrue(data['dingtalk_configured']); self.assertTrue(data['easyai_admin_credentials_configured'])
+        for secret in ['test-key','test-secret','test-admin','test-password']:
+            self.assertNotIn(secret, str(data))
+        self.assertNotIn('easyai_admin_username', data)
+        from unittest.mock import Mock
+        with patch.object(dashboard_app.requests, 'get', return_value=Mock(json=lambda:{'errcode':0})) as http:
+            self.assertTrue(client.post('/api/dingtalk/test',json={}).json['success'])
+            self.assertEqual(http.call_args.kwargs['params'], {'appkey':'test-key','appsecret':'test-secret'})
+        client.post('/api/config',json={'ding_appKey':'','ding_appSecret':''})
+        self.assertEqual(self.conn.execute("SELECT value FROM config WHERE key='ding_appSecret'").fetchone()[0], 'test-secret')
+
+    def test_schedule_settings_validate_persist_and_wake(self):
+        client = dashboard_app.app.test_client()
+        with patch.object(dashboard_app, 'start_project_sync_scheduler') as start, \
+             patch.object(dashboard_app.project_sync_wake, 'set') as wake, \
+             patch.object(dashboard_app, 'PROJECT_SYNC_SCHEDULER_ENABLED',False), \
+             patch.object(dashboard_app, 'PROJECT_SYNC_INTERVAL_SECONDS',3600):
+            self.assertEqual(client.post('/api/project-sync/schedule',json={'enabled':True,'intervalHours':0}).status_code,400)
+            self.assertEqual(client.post('/api/project-sync/schedule',json={'enabled':True,'intervalHours':1.5}).status_code,400)
+            data = client.post('/api/project-sync/schedule',json={'enabled':True,'intervalHours':2}).json
+            self.assertTrue(data['enabled']); self.assertEqual(data['intervalHours'],2)
+            self.assertEqual(dashboard_app.PROJECT_SYNC_INTERVAL_SECONDS,7200)
+            wake.assert_called_once(); start.assert_called_once()
+            dashboard_app.PROJECT_SYNC_SCHEDULER_ENABLED = False
+            dashboard_app.load_project_schedule()
+            self.assertTrue(dashboard_app.PROJECT_SYNC_SCHEDULER_ENABLED)
+            self.assertEqual(dashboard_app.PROJECT_SYNC_INTERVAL_SECONDS,7200)
+            self.assertFalse(client.post('/api/project-sync/schedule',json={'enabled':False,'intervalHours':1}).json['enabled'])
+
+    def test_overview_schedule_and_binding_badges(self):
+        self.add_project("p-a")
+        self.add_person_assignment("p-a")
+        self.conn.commit()
+        client = dashboard_app.app.test_client()
+        self.assertEqual(client.get('/api/persons').json[0]['wowidea_binding_status'], 'unbound')
+        self.conn.execute("INSERT INTO external_user_identity (dashboard_user_id,easyai_user_id,match_status) VALUES ('person-a','easy-a','confirmed')")
+        self.conn.commit()
+        self.assertEqual(client.get('/api/persons').json[0]['wowidea_binding_status'], 'bound')
+        with patch.object(dashboard_app, 'organization_consistency', return_value={'state':'consistent'}), patch.object(dashboard_app, 'PROJECT_SYNC_SCHEDULER_ENABLED', False):
+            data = client.get('/api/project-sync/overview').json
+            self.assertFalse(data['schedulerEnabled']); self.assertIsNone(data['nextSyncAt'])
+        from unittest.mock import Mock
+        with patch.object(dashboard_app, 'organization_consistency', return_value={'state':'consistent'}), patch.object(dashboard_app, 'PROJECT_SYNC_SCHEDULER_ENABLED', True), patch.object(dashboard_app, 'project_sync_scheduler_thread', Mock(is_alive=lambda: True)), patch.object(dashboard_app, 'project_sync_next_at', 123456789):
+            data = client.get('/api/project-sync/overview').json
+            self.assertTrue(data['schedulerEnabled']); self.assertEqual(data['nextSyncAt'], 123456789)
+        with patch.object(dashboard_app, 'organization_consistency', side_effect=RuntimeError('secret-test-value')):
+            data = client.get('/api/project-sync/overview').json
+            self.assertEqual(data['state'], 'error'); self.assertNotIn('secret-test-value', str(data))
 
     def test_person_sync_preserves_existing_visibility_and_union_id(self):
         self.conn.execute("INSERT INTO persons (id, name, ding_id, dingtalk_union_id, selected) VALUES ('ding-existing', 'Existing', 'ding-existing', 'union-existing', 0)")

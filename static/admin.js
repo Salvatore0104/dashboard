@@ -37,6 +37,14 @@
     installIcons();
     bind();
     loadAll();
+    let renderedDay = todayStr();
+    setInterval(() => {
+      if (renderedDay !== todayStr()) {
+        renderedDay = todayStr();
+        byId('archivedProjects').open = false;
+        renderProjects();
+      }
+    }, 30000);
   }
 
   function cache() {
@@ -95,6 +103,10 @@
     els.bindAllIdentityBtn.addEventListener("click", bindAllIdentities);
     byId("saveEasyAICredentialsBtn").addEventListener("click", saveEasyAICredentials);
     byId("editDingBtn").addEventListener("click", enableDingEdit);
+    byId("cancelDingEditBtn").addEventListener("click", () => setCredentialEditor("ding", false));
+    byId("editEasyAIBtn").addEventListener("click", () => setCredentialEditor("easyai", true));
+    byId("cancelEasyAIEditBtn").addEventListener("click", () => setCredentialEditor("easyai", false));
+    byId("saveProjectScheduleBtn").addEventListener("click", saveProjectSchedule);
     byId("saveDingBtn").addEventListener("click", saveDingConfig);
     els.projectBusinessTrip.addEventListener("change", () => renderBusinessTripPersonPicker(currentTripProject()));
     document.querySelectorAll("[data-close-modal]").forEach((btn) => btn.addEventListener("click", () => closeModal(btn.dataset.closeModal)));
@@ -127,6 +139,8 @@
     if (!els.identityBody) return;
     try {
       const rows = await fetchJson("api/project-sync/identities");
+      state.persons = await fetchJson("api/persons");
+      renderPersons();
       state.identityByDingId = new Map(rows.filter((row) => row.dingtalk_user_id).map((row) => [String(row.dingtalk_user_id), row]));
       if (!rows.length) {
         els.identityBody.innerHTML = `<tr><td colspan="5" class="table-empty">暂无身份记录。先执行项目同步预览或同步钉钉人员。</td></tr>`;
@@ -187,15 +201,17 @@
   }
 
   function renderProjects() {
-    els.projectCount.textContent = `${state.projects.length} 个`;
-    if (!state.projects.length) {
-      els.projectBody.innerHTML = `<tr><td colspan="8" class="table-empty">暂无项目</td></tr>`;
-      return;
-    }
-    els.projectBody.innerHTML = state.projects.map((p) => {
+    const today = todayStr();
+    const active = state.projects.filter(p => !p.end_date || p.end_date >= today);
+    const archived = state.projects.filter(p => p.end_date && p.end_date < today);
+    if (archived.length > (state.archivedCount || 0)) byId('archivedProjects').open = false;
+    state.archivedCount = archived.length;
+    els.projectCount.textContent = `${active.length} 个`;
+    byId('archiveCount').textContent = `${archived.length} 个`;
+    const renderRows = projects => projects.map((p) => {
       const tripPersons = parseJsonArray(p.business_trip_persons).map(personName).join("、") || "-";
       return `<tr>
-        <td><span class="color-swatch" style="background:${esc(p.color || CANDY_COLORS[0])}"></span><strong>${esc(p.name)}</strong></td>
+        <td><span class="color-swatch" style="background:${esc(p.color || CANDY_COLORS[0])}"></span><strong>${esc(p.name)}</strong> <span class="tag">${p.end_date && p.end_date < today ? '已归档' : p.start_date > today ? '待执行' : '执行中'}</span></td>
         <td>${esc(p.start_date)}</td>
         <td>${esc(p.end_date)}</td>
         <td>${p.business_trip == 1 ? '<span class="tag tag-trip">已启用</span>' : '<span class="tag">未启用</span>'}</td>
@@ -209,15 +225,19 @@
         </td>
       </tr>`;
     }).join("");
-    els.projectBody.querySelectorAll("[data-edit-project]").forEach((btn) => btn.addEventListener("click", () => openProjectModal(btn.dataset.editProject)));
-    els.projectBody.querySelectorAll("[data-trip-project]").forEach((btn) => btn.addEventListener("click", () => openBusinessTripModal(btn.dataset.tripProject)));
-    els.projectBody.querySelectorAll("[data-delete-project]").forEach((btn) => btn.addEventListener("click", () => deleteProject(btn.dataset.deleteProject)));
+    els.projectBody.innerHTML = renderRows(active) || '<tr><td colspan="8" class="table-empty">暂无待执行或执行中的项目</td></tr>';
+    byId('archivedProjectBody').innerHTML = renderRows(archived) || '<tr><td colspan="8" class="table-empty">暂无归档项目</td></tr>';
+    for (const body of [els.projectBody, byId('archivedProjectBody')]) {
+      body.querySelectorAll("[data-edit-project]").forEach((btn) => btn.addEventListener("click", () => openProjectModal(btn.dataset.editProject)));
+      body.querySelectorAll("[data-trip-project]").forEach((btn) => btn.addEventListener("click", () => openBusinessTripModal(btn.dataset.tripProject)));
+      body.querySelectorAll("[data-delete-project]").forEach((btn) => btn.addEventListener("click", () => deleteProject(btn.dataset.deleteProject)));
+    }
     loadProjectSyncStatuses();
   }
 
   async function loadProjectSyncStatuses() {
     await Promise.all(state.projects.map(async (project) => {
-      const tag = els.projectBody.querySelector(`[data-sync-status="${CSS.escape(String(project.id))}"]`);
+      const tag = document.querySelector(`[data-sync-status="${CSS.escape(String(project.id))}"]`);
       if (!tag) return;
       try {
         const data = await fetchJson(`api/project-sync/${encodeURIComponent(project.id)}/status`);
@@ -249,7 +269,7 @@
   }
 
   function openGlobalSyncModal() {
-    els.globalSyncSummary.textContent = "点击“生成预览”读取当前项目组织和成员差异。离开成员将从对应组织移除；符合归属和安全条件的已删除项目组织将执行清理。";
+    els.globalSyncSummary.textContent = "点击“生成预览”读取当前项目组织和成员差异。离开或到期成员将移除，平台组织始终保留；删除组织请前往 wowidea 平台。";
     els.globalSyncBody.innerHTML = `<tr><td colspan="5" class="table-empty">尚未生成预览</td></tr>`;
     els.globalSyncRunBtn.disabled = true;
     openModal("globalSyncModal");
@@ -289,7 +309,7 @@
   async function runGlobalSync() {
     if (!state.globalSyncPreview) return previewGlobalSync();
     const totals = state.globalSyncPreview.totals || {};
-    openActionConfirm("确认执行全局同步", `确认执行全局同步？\n\n新增组织 ${totals.create_org || 0}，新增成员 ${totals.added || 0}，将移除成员 ${totals.removed || 0}，待处理清理 ${totals.pending_delete || 0}。\n\n系统会按归属和安全校验执行成员移除及符合条件的组织清理。`, async () => {
+    openActionConfirm("确认执行全局同步", `确认执行全局同步？\n\n新增组织 ${totals.create_org || 0}，新增成员 ${totals.added || 0}，将移除成员 ${totals.removed || 0}，待处理清理 ${totals.pending_delete || 0}。\n\n仅清理成员关系，不删除平台组织。新组织初始化 5000 积分，扣费策略为组织优先。`, async () => {
       els.globalSyncRunBtn.disabled = true;
       try {
         const result = await fetchJson("api/project-sync/global/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) });
@@ -446,6 +466,7 @@
         <small>${esc(groupLabel)}</small>
       </span>
       ${statusTag}
+      <span class="binding-badge ${person.wowidea_binding_status === "bound" ? "is-bound" : "is-unbound"}" title="wowidea 用户关联状态">${person.wowidea_binding_status === "bound" ? "已绑定" : "未绑定"}</span>
       <label class="board-visibility-toggle"><input type="checkbox" data-toggle-board="${esc(person.id)}" ${person.selected !== 0 && person.selected !== false ? "checked" : ""}>前台显示</label>
       <button class="btn btn-warning btn-sm" data-leave-person="${esc(person.id)}">请假</button>
       <button class="btn btn-danger btn-sm" data-delete-person="${esc(person.id)}">删除</button>
@@ -569,14 +590,14 @@
 
   async function deleteProject(id) {
     const project = state.projects.find((item) => String(item.id) === String(id));
-    openActionConfirm("确认删除项目", `将删除项目“${project?.name || id}”及其本地分配。\n\n系统会尝试清理对应的 Dashboard 组织；若组织清理失败，本地删除仍会完成，但会明确标记待重试。`, async () => {
+    openActionConfirm("确认删除项目", `将删除项目“${project?.name || id}”及其本地分配。\n\n仅清空该项目管理的组织成员，保留平台组织及余额。组织只能在 wowidea 平台删除。`, async () => {
       try {
         const result = await fetchJson(`api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
         if (!result.success) throw new Error(result.message || "项目删除失败");
         await loadAll();
         const sync = result.sync || {};
         if (sync.success === false || sync.retryable) return toast(`项目本地已删除，但组织清理失败或待重试：${sync.error || sync.cleanup?.error || "请执行全局同步重试"}`);
-        toast("项目及对应组织清理已完成");
+        toast("本地项目已删除，成员已清理，平台组织保留");
       } catch (error) { toast(error.message || "项目删除失败"); }
     });
   }
@@ -633,7 +654,7 @@
     els.leaveActiveColor.value = state.config.leave_active_color || "#dc2626";
     els.leaveUpcomingColor.value = state.config.leave_upcoming_color || "#2563eb";
     els.conflictColor.value = state.config.conflict_color || "#dc2626";
-    els.easyaiAdminUsername.value = state.config.easyai_admin_username || "";
+    els.easyaiAdminUsername.value = "";
     els.easyaiAdminPassword.value = "";
     const credentialsConfigured = !!state.config.easyai_admin_credentials_configured;
     els.easyaiAdminCredentialsStatus.textContent = credentialsConfigured ? "已配置" : "未配置";
@@ -645,18 +666,14 @@
     renderDeptColorGrid();
 
     // 钉钉字段：已配置时只读，显示「已配置」标签
-    const hasDing = !!(state.config.ding_appKey && state.config.ding_appSecret);
-    els.dingAppKey.value = state.config.ding_appKey || "";
-    els.dingAppKey.readOnly = hasDing;
-    els.dingAppSecret.value = state.config.ding_appSecret || "";
-    els.dingAppSecret.readOnly = hasDing;
-    const editBtn = byId("editDingBtn");
-    const saveRow = byId("dingSaveRow");
-    const savedTag = byId("dingSavedTag");
-    if (editBtn) editBtn.style.display = hasDing ? "" : "none";
-    if (saveRow) saveRow.style.display = hasDing ? "none" : "flex";
-    if (savedTag) savedTag.style.display = hasDing ? "inline-flex" : "none";
-    if (savedTag) savedTag.className = "tag tag-primary";
+    setCredentialEditor("ding", false);
+    setCredentialEditor("easyai", false);
+    byId("saveProjectScheduleBtn").disabled = true;
+    fetchJson("api/project-sync/schedule").then(data => {
+      byId("projectSyncEnabled").checked = data.enabled;
+      byId("projectSyncHours").value = data.intervalHours;
+      byId("saveProjectScheduleBtn").disabled = false;
+    }).catch(() => toast("同步设置读取失败，请重新打开配置"));
 
     openModal("configModal");
   }
@@ -711,8 +728,8 @@
   async function testDingTalk() {
     els.dingTestResult.style.display = "inline-flex";
     els.dingTestResult.textContent = "正在测试...";
-    const appKey = els.dingAppKey.readOnly ? state.config.ding_appKey : els.dingAppKey.value.trim();
-    const appSecret = els.dingAppKey.readOnly ? state.config.ding_appSecret : els.dingAppSecret.value.trim();
+    const appKey = els.dingAppKey.readOnly ? "" : els.dingAppKey.value.trim();
+    const appSecret = els.dingAppKey.readOnly ? "" : els.dingAppSecret.value.trim();
     const data = await fetchJson("api/dingtalk/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ appKey, appSecret }) });
     els.dingTestResult.textContent = data.message || (data.success ? "连接成功" : "连接失败");
     els.dingTestResult.className = `tag ${data.success ? "tag-primary" : "tag-danger"}`;
@@ -733,40 +750,50 @@
   }
 
   function enableDingEdit() {
-    els.dingAppKey.readOnly = false;
-    els.dingAppSecret.readOnly = false;
-    els.dingAppKey.focus();
-    byId("editDingBtn").style.display = "none";
-    byId("dingSaveRow").style.display = "";
-    byId("dingSavedTag").style.display = "none";
+    setCredentialEditor("ding", true);
+  }
+
+  function setCredentialEditor(kind, editing) {
+    const ding = kind === "ding";
+    byId(ding ? "dingCredentialFields" : "easyaiCredentialFields").hidden = !editing;
+    byId(ding ? "editDingBtn" : "editEasyAIBtn").hidden = editing;
+    const fields = ding ? [els.dingAppKey, els.dingAppSecret] : [els.easyaiAdminUsername, els.easyaiAdminPassword];
+    fields.forEach(field => { field.value = ""; field.readOnly = !editing; });
+    const configured = ding ? state.config.dingtalk_configured : state.config.easyai_admin_credentials_configured;
+    const tag = byId(ding ? "dingSavedTag" : "easyaiAdminCredentialsStatus");
+    tag.textContent = configured ? "已配置 · ********" : "未配置";
+    tag.className = "tag";
+    if (ding) byId("dingSaveRow").style.display = "flex";
+    if (editing) fields[0].focus();
+  }
+
+  async function saveProjectSchedule() {
+    const hours = Number(byId("projectSyncHours").value);
+    if (!Number.isInteger(hours) || hours < 1 || hours > 168) return toast("请输入 1–168 的整数小时");
+    const button = byId("saveProjectScheduleBtn");
+    button.disabled = true;
+    try {
+      await fetchJson("api/project-sync/schedule", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({enabled:byId("projectSyncEnabled").checked, intervalHours:hours})});
+      toast("同步设置已保存并生效");
+    } catch (error) { toast(error.message || "同步设置保存失败"); }
+    finally { button.disabled = false; }
   }
 
   async function saveDingConfig() {
     const appKey = els.dingAppKey.value.trim();
     const appSecret = els.dingAppSecret.value.trim();
-    if (!appKey || !appSecret) return toast("请填写完整的钉钉 AppKey 和 AppSecret");
+    if ((!appKey || !appSecret) && !state.config.dingtalk_configured) return toast("请填写完整的钉钉 AppKey 和 AppSecret");
     const response = await fetch("api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ding_appKey: appKey, ding_appSecret: appSecret }) });
     if (!response.ok) return toast("钉钉配置保存失败");
-    // 更新本地 state
-    state.config.ding_appKey = appKey;
-    state.config.ding_appSecret = appSecret;
-    // 恢复只读状态
-    els.dingAppKey.readOnly = true;
-    els.dingAppSecret.readOnly = true;
-    byId("editDingBtn").style.display = "";
-    byId("dingSaveRow").style.display = "none";
-    byId("dingSavedTag").style.display = "inline-flex";
+    state.config = await fetchJson("api/config");
+    setCredentialEditor("ding", false);
     toast("钉钉配置已保存");
   }
 
   async function saveConfig() {
-    const currentDingAppKey = els.dingAppKey.readOnly ? (state.config.ding_appKey || "") : els.dingAppKey.value.trim();
-    const currentDingAppSecret = els.dingAppSecret.readOnly ? (state.config.ding_appSecret || "") : els.dingAppSecret.value.trim();
     const body = {
       project_title: els.projectTitle.value.trim() || "Claw 项目排期看板",
       default_assign_days: els.defaultAssignDays.value || "1",
-      ding_appKey: currentDingAppKey,
-      ding_appSecret: currentDingAppSecret,
       theme_primary: els.themePrimary.value,
       trip_upcoming_color: els.tripUpcomingColor.value,
       trip_active_color: els.tripActiveColor.value,
@@ -791,7 +818,7 @@
   async function saveEasyAICredentials() {
     const username = els.easyaiAdminUsername.value.trim();
     const password = els.easyaiAdminPassword.value;
-    if (!username || !password) return toast("请填写管理员账号和密码");
+    if ((!username || !password) && !state.config.easyai_admin_credentials_configured) return toast("请填写管理员账号和密码");
     const body = { easyai_admin_username: username, easyai_admin_password: password };
     try {
       const response = await fetch("api/config", {
@@ -801,7 +828,7 @@
       });
       if (!response.ok) throw new Error("保存失败");
       await loadAll();
-      els.easyaiAdminPassword.value = "";
+      setCredentialEditor("easyai", false);
       toast("管理员账号已保存");
     } catch (error) {
       toast(error.message || "管理员账号保存失败");
@@ -823,8 +850,8 @@
 
   async function syncLeaveNow() {
     toast("正在同步请假状态...");
-    const appKey = state.config.ding_appKey || "";
-    const appSecret = state.config.ding_appSecret || "";
+    const appKey = "";
+    const appSecret = "";
     const data = await fetchJson("api/leave/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -858,9 +885,9 @@
   }
 
   async function fetchDingUsers() {
-    const appKey = state.config.ding_appKey || "";
-    const appSecret = state.config.ding_appSecret || "";
-    if (!appKey || !appSecret) return toast("请先在系统配置里填写钉钉 AppKey 和 AppSecret");
+    const appKey = "";
+    const appSecret = "";
+    if (!state.config.dingtalk_configured) return toast("请先在系统配置里填写钉钉 AppKey 和 AppSecret");
     els.syncPersonsStatus.textContent = "正在获取...";
     els.syncPersonsStatus.className = "sync-status";
     const data = await fetchJson("api/dingtalk/users", {

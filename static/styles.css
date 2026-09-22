@@ -506,6 +506,33 @@ a {
   background: #f0fdf4;
 }
 
+[hidden] { display: none !important; }
+.binding-badge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 2px 5px;
+  border-radius: 5px;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.binding-badge.is-bound { color: #166534; background: #dcfce7; }
+.binding-badge.is-unbound { color: #92400e; background: #fef3c7; }
+.organization-sync {
+  display: inline-flex;
+  padding: 5px 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: #475569;
+  background: #f1f5f9;
+}
+.organization-sync.is-consistent { color: #166534; background: #dcfce7; }
+.organization-sync.is-pending { color: #92400e; background: #fef3c7; }
+.board-layout > .toolbar { flex-wrap: wrap; }
+.board-layout .toolbar-title { flex: 1 1 650px; flex-wrap: wrap; }
+.board-layout .toolbar-title h1 { white-space: nowrap; flex-shrink: 0; }
+.board-layout .toolbar-actions { flex: 0 0 auto; }
+
 .gantt-wrapper {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -1434,6 +1461,8 @@ td.actions {
 
 .settings-section {
   display: grid;
+  align-content: start;
+  min-width: 0;
   gap: 12px;
   padding: 14px;
   border: 1px solid var(--line-soft);
@@ -1441,9 +1470,41 @@ td.actions {
   background: #fbfdff;
 }
 
-.settings-section:nth-child(3),
-.settings-section:nth-child(4) {
+.settings-wide {
   grid-column: 1 / -1;
+}
+
+.project-archive { border-top: 1px solid var(--line); margin-top: 14px; }
+.project-archive summary { cursor: pointer; padding: 14px 16px; color: var(--muted); font-weight: 600; }
+
+.settings-basics {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(100px, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+}
+
+.settings-schedule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 14px 20px;
+}
+
+.settings-schedule > label {
+  display: flex;
+  align-items: center;
+  align-self: center;
+  gap: 6px;
+}
+
+.settings-schedule .field { width: 150px; }
+.settings-schedule .btn { flex: 0 0 auto; }
+#dingCredentialFields, #easyaiCredentialFields { display: grid; gap: 12px; }
+
+@media (max-width: 600px) {
+  .settings-grid, .settings-basics { grid-template-columns: 1fr; }
+  .settings-wide { grid-column: auto; }
 }
 
 .input-row {
@@ -1646,17 +1707,10 @@ td.actions {
 
   .entry-grid,
   .grid.cols-2,
-  .form-row,
-  .settings-grid,
-  .dept-color-grid,
-  .status-color-grid {
+  .form-row {
     grid-template-columns: 1fr;
   }
 
-  .settings-section:nth-child(3),
-  .settings-section:nth-child(4) {
-    grid-column: auto;
-  }
 
   .admin-person-card {
     grid-template-columns: 34px minmax(76px, 1fr) auto;

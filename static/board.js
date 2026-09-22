@@ -98,6 +98,7 @@
       this.loadData();
       this.connectSSE();
       this.loadSyncStatus();
+      if (this.els.organizationSync) this.state.orgTimer = setInterval(() => this.loadOrganizationStatus(), 60000);
     }
 
     cacheEls() {
@@ -111,6 +112,7 @@
       this.els.daySelect = document.getElementById("daySelect");
       this.els.updateTime = document.getElementById("updateTime");
       this.els.syncStatus = document.getElementById("syncStatusBar");
+      this.els.organizationSync = document.getElementById("organizationSyncStatus");
     }
 
     installShell() {
@@ -204,8 +206,34 @@
             ? `只读看板 · 最后更新 ${new Date().toLocaleTimeString("zh-CN")}`
             : `最后更新 ${new Date().toLocaleTimeString("zh-CN")}`;
         }
+        this.loadOrganizationStatus();
       } catch (error) {
         this.showEmpty(`数据加载失败：${error.message}`);
+      }
+    }
+
+    async loadOrganizationStatus() {
+      const el = this.els.organizationSync;
+      if (!el || this.state.orgLoading) return;
+      this.state.orgLoading = true;
+      el.className = "organization-sync";
+      el.textContent = "↻ 核对中";
+      try {
+        const data = await fetchJson("api/project-sync/overview");
+        const same = data.state === "consistent";
+        el.className = `organization-sync ${same ? "is-consistent" : "is-pending"}`;
+        const next = data.schedulerEnabled
+          ? (data.nextSyncAt ? `下次 ${new Date(data.nextSyncAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}` : "↻ 同步中")
+          : "⏸";
+        const labels = {consistent:"组织一致", different:"待同步", syncing:"同步中", error:"核对失败", unavailable:"未启用", empty:"暂无项目"};
+        el.textContent = `${same ? "✓" : "○"} ${labels[data.state] || "状态未知"} · ${next}`;
+        el.title = `wowidea：${data.message}。${data.schedulerEnabled ? "自动同步已开启" : "自动同步关闭，下次未安排；可在后台系统配置中开启"}。核对时间：${new Date(data.checkedAt).toLocaleString("zh-CN")}。每分钟核对组织名称、父组织和成员。`;
+      } catch {
+        el.className = "organization-sync is-pending";
+        el.textContent = "○ 核对失败";
+        el.title = "无法核对 wowidea 组织信息或读取下次同步时间，请在后台测试连接";
+      } finally {
+        this.state.orgLoading = false;
       }
     }
 
@@ -321,14 +349,14 @@
         return;
       }
       if (!this.syncMeta.lastSyncTime) {
-        if (textEl) textEl.textContent = `每 ${this.syncMeta.intervalHours} 小时同步`;
+        if (textEl) textEl.textContent = `请假 · 每 ${this.syncMeta.intervalHours} 小时同步`;
         if (countEl) countEl.textContent = "等待首次同步";
         return;
       }
       const elapsed = Date.now() - this.syncMeta.lastSyncTime;
       const total = this.syncMeta.intervalHours * 3600 * 1000;
       const remaining = Math.max(0, total - elapsed);
-      if (textEl) textEl.textContent = `每 ${this.syncMeta.intervalHours} 小时同步`;
+      if (textEl) textEl.textContent = `请假 · 每 ${this.syncMeta.intervalHours} 小时同步`;
       if (countEl) countEl.textContent = formatDuration(remaining);
     }
 
@@ -1414,6 +1442,7 @@
     }
 
     destroy() {
+      if (this.state.orgTimer) clearInterval(this.state.orgTimer);
       this.disconnectSSE();
       if (this.state.syncTimer) clearInterval(this.state.syncTimer);
       if (this.state.resizeTimer) clearTimeout(this.state.resizeTimer);

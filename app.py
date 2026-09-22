@@ -16,6 +16,8 @@ load_dotenv(override=False)
 
 from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, preview_all_projects, sync_all_projects, cleanup_deleted_binding, refresh_identity_inventory, identity_inventory_preview, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, load_easyai_runtime_config, normalize_bearer_token, mask_secret, EasyAIClient, ProjectSyncCoordinator
 
+from project_sync import organization_consistency
+
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
 
@@ -244,9 +246,10 @@ def update_project(pid):
         sql = f"UPDATE projects SET {','.join(updates)} WHERE id=?"
         conn.execute(sql, params)
 
-    if 'name' in data:
+    if any(key in data for key in ('name', 'startDate', 'endDate')):
         try:
-            rename_result = project_sync_coordinator.run(pid, lambda: update_project_binding_name(conn, pid, data['name']))
+            project_name = conn.execute('SELECT name FROM projects WHERE id=?', (pid,)).fetchone()['name']
+            rename_result = project_sync_coordinator.run(pid, lambda: update_project_binding_name(conn, pid, project_name))
             if rename_result.get('skipped'):
                 conn.rollback()
                 conn.close()
@@ -485,7 +488,11 @@ def unbind_project_sync_identity(user_id):
 @app.route('/api/persons', methods=['GET'])
 def get_persons():
     conn = get_db()
-    rows = conn.execute('SELECT * FROM persons ORDER BY group_type, sort_order, name').fetchall()
+    rows = conn.execute('''SELECT p.*, CASE WHEN i.easyai_user_id IS NOT NULL
+        AND i.easyai_user_id != '' AND i.match_status IN ('confirmed', 'auto_matched')
+        THEN 'bound' ELSE 'unbound' END AS wowidea_binding_status
+        FROM persons p LEFT JOIN external_user_identity i ON i.dashboard_user_id=p.id
+        ORDER BY p.group_type, p.sort_order, p.name''').fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
 
@@ -673,7 +680,9 @@ def get_config():
     conn.commit()
     rows = conn.execute('SELECT key, value FROM config').fetchall()
     conn.close()
-    result = {r['key']: r['value'] for r in rows if not r['key'].startswith('easyai_')}
+    result = {r['key']: r['value'] for r in rows if not r['key'].startswith('easyai_') and r['key'] not in {'ding_appKey', 'ding_appSecret'}}
+    ding_key, ding_secret = get_dingtalk_credentials({r['key']: r['value'] for r in rows})
+    result['dingtalk_configured'] = bool(ding_key and ding_secret)
     encrypted = next((r['value'] for r in rows if r['key'] == 'easyai_admin_bearer_token_encrypted'), '')
     encrypted_username = next((r['value'] for r in rows if r['key'] == 'easyai_admin_username_encrypted'), '')
     encrypted_password = next((r['value'] for r in rows if r['key'] == 'easyai_admin_password_encrypted'), '')
@@ -687,14 +696,13 @@ def get_config():
         conn.commit()
         conn.close()
     result['easyai_admin_bearer_token_configured'] = bool(configured_key)
-    result['easyai_admin_bearer_token_masked'] = mask_secret(configured_key)
+    result['easyai_admin_bearer_token_masked'] = '********' if configured_key else ''
     try:
         username = decrypt_secret(encrypted_username) if encrypted_username else os.getenv('EASYAI_ADMIN_USERNAME', '')
         password = decrypt_secret(encrypted_password) if encrypted_password else os.getenv('EASYAI_ADMIN_PASSWORD', '')
     except RuntimeError:
         username, password = '', ''
     result['easyai_admin_credentials_configured'] = bool(username and password)
-    result['easyai_admin_username'] = username if username else ''
     return jsonify(result)
 
 @app.route('/api/config', methods=['POST'])
@@ -702,6 +710,12 @@ def save_config():
     data = request.json
     conn = get_db()
     for key, value in data.items():
+        if key in {'project_sync_enabled', 'project_sync_interval_hours'}:
+            continue
+        if key in {'ding_appKey', 'ding_appSecret'} and not str(value or '').strip():
+            continue
+        if key.endswith('_configured') or key.endswith('_masked'):
+            continue
         if key == 'easyai_admin_bearer_token':
             if str(value or '').strip():
                 conn.execute('INSERT OR REPLACE INTO config (key, value) VALUES (?,?)', ('easyai_admin_bearer_token_encrypted', encrypt_secret(str(value).strip())))
@@ -752,11 +766,17 @@ def test_easyai_connection():
 
 # ==================== 钉钉 API ====================
 
+def dingtalk_request_credentials(data):
+    conn = get_db()
+    config = {r['key']: r['value'] for r in conn.execute('SELECT key,value FROM config')}
+    conn.close()
+    key, secret = get_dingtalk_credentials(config)
+    return (str(data.get('appKey') or key), str(data.get('appSecret') or secret))
+
 @app.route('/api/dingtalk/test', methods=['POST'])
 def test_dingtalk():
-    data = request.json
-    app_key = data.get('appKey')
-    app_secret = data.get('appSecret')
+    data = request.json or {}
+    app_key, app_secret = dingtalk_request_credentials(data)
     if not app_key or not app_secret:
         return jsonify({"success": False, "message": "请提供 AppKey 和 AppSecret"})
     try:
@@ -767,14 +787,13 @@ def test_dingtalk():
         if result.get('errcode', 0) == 0:
             return jsonify({"success": True, "message": "连接成功"})
         return jsonify({"success": False, "message": result.get('errmsg', '未知错误')})
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)})
+    except Exception:
+        return jsonify({"success": False, "message": "钉钉连接失败，请检查凭据或网络"})
 
 @app.route('/api/dingtalk/users', methods=['POST'])
 def get_dingtalk_users():
-    data = request.json
-    app_key = data.get('appKey')
-    app_secret = data.get('appSecret')
+    data = request.json or {}
+    app_key, app_secret = dingtalk_request_credentials(data)
     dept_ids = data.get('deptIds', [])
     
     if not app_key or not app_secret:
@@ -1599,7 +1618,62 @@ def _project_sync_interval_seconds():
 
 
 PROJECT_SYNC_INTERVAL_SECONDS = _project_sync_interval_seconds()
+project_sync_next_at = None
+project_sync_wake = threading.Event()
 project_sync_coordinator = ProjectSyncCoordinator()
+
+
+def load_project_schedule():
+    global PROJECT_SYNC_SCHEDULER_ENABLED, PROJECT_SYNC_INTERVAL_SECONDS
+    conn = get_db()
+    values = dict(conn.execute("SELECT key,value FROM config WHERE key IN ('project_sync_enabled','project_sync_interval_hours')").fetchall())
+    conn.close()
+    if 'project_sync_enabled' in values:
+        PROJECT_SYNC_SCHEDULER_ENABLED = values['project_sync_enabled'] == 'true'
+    PROJECT_SYNC_INTERVAL_SECONDS = int(values.get('project_sync_interval_hours', '1')) * 3600
+
+
+@app.route('/api/project-sync/schedule', methods=['GET', 'POST'])
+def project_schedule_settings():
+    global PROJECT_SYNC_SCHEDULER_ENABLED, PROJECT_SYNC_INTERVAL_SECONDS, project_sync_next_at
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        hours = data.get('intervalHours')
+        enabled = data.get('enabled')
+        if type(enabled) is not bool or type(hours) is not int or not 1 <= hours <= 168:
+            return jsonify({'success': False, 'message': '同步周期须为 1–168 的整数小时'}), 400
+        conn = get_db()
+        conn.executemany('INSERT OR REPLACE INTO config (key,value) VALUES (?,?)',
+                         [('project_sync_enabled', 'true' if enabled else 'false'), ('project_sync_interval_hours', str(hours))])
+        conn.commit(); conn.close()
+        PROJECT_SYNC_SCHEDULER_ENABLED = enabled
+        PROJECT_SYNC_INTERVAL_SECONDS = hours * 3600
+        project_sync_next_at = None
+        project_sync_wake.set()
+        start_project_sync_scheduler()
+        broadcast('config_changed', {'action': 'project_schedule'})
+    conn = get_db()
+    values = dict(conn.execute("SELECT key,value FROM config WHERE key IN ('project_sync_enabled','project_sync_interval_hours')").fetchall())
+    conn.close()
+    return jsonify({'success': True, 'enabled': values.get('project_sync_enabled', str(PROJECT_SYNC_SCHEDULER_ENABLED).lower()) == 'true',
+                    'intervalHours': int(values.get('project_sync_interval_hours', '1'))})
+
+
+@app.route('/api/project-sync/overview', methods=['GET'])
+def project_sync_overview():
+    conn = get_db()
+    try:
+        result = organization_consistency(conn)
+    except Exception:
+        # Do not return provider responses or credentials to the browser.
+        result = {"state": "error", "message": "平台核对失败，请在后台测试连接"}
+    finally:
+        conn.close()
+    scheduler_active = bool(PROJECT_SYNC_SCHEDULER_ENABLED and project_sync_scheduler_thread and project_sync_scheduler_thread.is_alive())
+    return jsonify({**result, "checkedAt": int(time.time() * 1000),
+                    "schedulerEnabled": scheduler_active,
+                    "nextSyncAt": project_sync_next_at if scheduler_active else None,
+                    "intervalSeconds": PROJECT_SYNC_INTERVAL_SECONDS})
 
 def sync_assignment_project(project_id, trigger):
     """Run post-write sync without turning an external failure into a local rollback."""
@@ -1624,7 +1698,7 @@ def sync_deleted_project(project_id):
             return cleanup_deleted_binding(conn, str(project_id), 'project-delete')
         result = project_sync_coordinator.run(str(project_id), run_cleanup)
         conn.commit()
-        return {'success': result.get('status') in {'deleted', 'already_deleted'}, 'projectId': str(project_id), 'cleanup': result, 'retryable': result.get('status') == 'failed'}
+        return {'success': result.get('status') in {'deleted', 'already_deleted', 'retained'}, 'projectId': str(project_id), 'cleanup': result, 'retryable': result.get('status') == 'failed'}
     except Exception as exc:
         conn.commit()
         return {'success': False, 'projectId': str(project_id), 'error': redact_error(exc), 'retryable': True}
@@ -1643,14 +1717,29 @@ def start_leave_sync_scheduler():
 
 def schedule_project_sync():
     """Run project membership synchronization every configured interval."""
+    global project_sync_next_at
     while True:
-        time.sleep(PROJECT_SYNC_INTERVAL_SECONDS)
+        if not PROJECT_SYNC_SCHEDULER_ENABLED:
+            project_sync_next_at = None
+            project_sync_wake.wait()
+            project_sync_wake.clear()
+            continue
+        project_sync_next_at = int((time.time() + PROJECT_SYNC_INTERVAL_SECONDS) * 1000)
+        if project_sync_wake.wait(PROJECT_SYNC_INTERVAL_SECONDS):
+            project_sync_wake.clear()
+            project_sync_next_at = None
+            continue
+        project_sync_next_at = None
+        if not PROJECT_SYNC_SCHEDULER_ENABLED:
+            continue
         conn = get_db()
         try:
             projects = [row['id'] for row in conn.execute('SELECT id FROM projects ORDER BY id').fetchall()]
         finally:
             conn.close()
         for project in projects:
+            if not PROJECT_SYNC_SCHEDULER_ENABLED:
+                break
             def run_one(project_id=project):
                 conn = get_db()
                 try:
@@ -1706,6 +1795,7 @@ def health():
 
 if __name__ == '__main__':
     init_db()
+    load_project_schedule()
     start_leave_sync_scheduler()
     start_project_sync_scheduler()
     

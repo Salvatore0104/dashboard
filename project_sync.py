@@ -235,23 +235,37 @@ class EasyAIClient:
     def find_organizations_by_name(self, name):
         return [org for org in iter_organizations(self.list_organizations()) if str(org.get("name", "")).strip() == str(name).strip()]
 
-    def create_organization(self, name, parent_id, external_id):
+    def create_organization(self, name, parent_id, external_id, description=None):
         if self.mode == "mock":
             key = str(external_id)
             if key in self._mock_orgs:
                 return self._mock_orgs[key]
-            org = {"_id": f"mock-org-{hashlib.sha1(key.encode()).hexdigest()[:12]}", "name": name, "parent": parent_id, "external_id": key, "description": f"dashboard project {external_id}"}
+            org = {"_id": f"mock-org-{hashlib.sha1(key.encode()).hexdigest()[:12]}", "name": name, "parent": parent_id, "external_id": key, "description": f"dashboard project {external_id}", "balance": 5000, "balance_deduction_strategy": "organization_first"}
             self._mock_orgs[key] = org
+            if description is not None:
+                org['description'] = description
             return org
-        # The deployed OpenAPI DTO uses `parent` and returns Mongo-style `_id`.
-        # Keep the request limited to documented fields; external_id is local.
-        payload = {"name": name, "parent": str(parent_id), "description": f"dashboard project {external_id}"}
-        data = self._request("POST", "/v1/openapi/organization", json=payload)
+        # Use the management creation endpoint: the OpenAPI DTO omits billing
+        # strategy. Initialize in the creation request, never recharge on sync.
+        payload = {"name": name, "parent": str(parent_id), "description": f"dashboard project {external_id}",
+                   "balance": 5000, "balance_deduction_strategy": "organization_first"}
+        if description is not None:
+            payload['description'] = description
+        data = self._request("POST", "/organization", json=payload)
         if isinstance(data, dict):
             body = data.get("data", data)
             if isinstance(body, dict):
                 return body
         raise RuntimeError("组织创建响应格式无效")
+
+    def update_organization_description(self, org_id, description):
+        if self.mode == 'mock':
+            for org in self._mock_orgs.values():
+                if organization_id(org) == str(org_id):
+                    org['description'] = description
+                    return org
+            return {'_id': str(org_id), 'description': description, 'simulated': True}
+        return self._request('PATCH', f'/organization/{org_id}', json={'description': description})
 
     def move_organization(self, org_id, parent_id):
         if not org_id or not parent_id:
@@ -297,23 +311,8 @@ class EasyAIClient:
         return data.get("data", data) if isinstance(data, dict) else data
 
     def delete_organization(self, org_id, parent_id, external_id):
-        """Delete only an organization proven to be a Dashboard-owned binding."""
-        org = self.validate_owned_organization(org_id, parent_id, external_id, require_empty=True)
-        if not org:
-            return {"deleted": True, "already_deleted": True, "id": str(org_id)}
-        if self.mode == "mock":
-            for key, value in list(self._mock_orgs.items()):
-                if organization_id(value) == str(org_id):
-                    del self._mock_orgs[key]
-                    return {"deleted": True, "id": str(org_id)}
-            return {"deleted": True, "already_deleted": True, "id": str(org_id)}
-        try:
-            data = self._request("DELETE", f"/organization/{org_id}")
-        except RuntimeError as exc:
-            if "API 404" in str(exc):
-                return {"deleted": True, "already_deleted": True, "id": str(org_id)}
-            raise
-        return data.get("data", data) if isinstance(data, dict) else data
+        """Dashboard never owns organization deletion; use the platform UI."""
+        raise RuntimeError("看板禁止删除平台组织，请在 wowidea 平台管理")
 
     def validate_owned_organization(self, org_id, parent_id, external_id, managed_user_ids=None, require_empty=False):
         org = next((item for item in iter_organizations(self.list_organizations()) if organization_id(item) == str(org_id)), None)
@@ -326,13 +325,16 @@ class EasyAIClient:
         users = org.get("users") or []
         user_ids = {str(item.get("id") or item.get("_id") or item.get("user_id") or item.get("userId")) if isinstance(item, dict) else str(item) for item in users}
         balance = org.get("balance", 0) or 0
-        if child_nodes or float(balance or 0) > 0:
+        if require_empty and (child_nodes or float(balance or 0) > 0):
             raise RuntimeError("组织仍有子组织、成员或余额，拒绝删除")
-        if managed_user_ids is not None and not user_ids.issubset({str(item) for item in managed_user_ids}):
+        if require_empty and managed_user_ids is not None and not user_ids.issubset({str(item) for item in managed_user_ids}):
             raise RuntimeError("组织包含非 Dashboard 托管成员，拒绝删除")
         if require_empty and (int(member_count) > 0 or user_ids):
             raise RuntimeError("组织移除后仍有成员，拒绝删除")
-        if actual_parent != str(parent_id) or description != f"dashboard project {external_id}":
+        # The locally persisted ID and parent establish the binding. Description
+        # is user-facing project dates, not an ownership token. Only tracked
+        # membership IDs may be removed; unrelated members stay untouched.
+        if actual_parent != str(parent_id):
             raise RuntimeError("组织归属或 Dashboard 标记不匹配，拒绝删除")
         return org
 
@@ -460,6 +462,9 @@ def ensure_tables(conn):
         PRIMARY KEY (project_id, easyai_user_id)
     );
     """)
+    binding_columns = {row[1] for row in conn.execute('PRAGMA table_info(project_easyai_binding)')}
+    if 'organization_description' not in binding_columns:
+        conn.execute("ALTER TABLE project_easyai_binding ADD COLUMN organization_description TEXT DEFAULT ''")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_external_dingtalk_user ON external_user_identity(dingtalk_user_id) WHERE dingtalk_user_id <> ''")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_external_dingtalk_union ON external_user_identity(dingtalk_union_id) WHERE dingtalk_union_id <> ''")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_external_easyai_user ON external_user_identity(easyai_user_id) WHERE easyai_user_id <> ''")
@@ -477,12 +482,16 @@ def project_members(conn, project_id):
     rows = conn.execute("""
         SELECT DISTINCT p.id, p.name, p.ding_id, COALESCE(p.dingtalk_union_id, '') AS dingtalk_union_id
         FROM assignments a JOIN persons p ON p.id=a.person_id
+        JOIN projects project ON project.id=a.project_id
         WHERE a.project_id=?
+          AND (project.end_date='' OR project.end_date>=?)
           AND (a.start_date='' OR a.start_date<=?)
           AND (a.end_date='' OR a.end_date>=?)
-    """, (project_id, today, today)).fetchall()
+    """, (project_id, today, today, today)).fetchall()
     # An empty active set is meaningful: expired assignments must leave the
     # project organization instead of being re-added by a fallback query.
+    # Project expiry also ends membership even if an assignment extends beyond
+    # the project. Keep the project/binding: expiry never deletes its organization.
     return rows
 
 
@@ -629,28 +638,40 @@ def identity_inventory_preview(conn, easyai_users):
 def ensure_binding(conn, project_id, project_name):
     existing = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project_id,)).fetchone()
     if existing and existing["easyai_org_id"]:
-        return dict(existing)
+        sync_binding_description(conn, project_id, existing['easyai_org_id'])
+        if SYNC_ENABLED:
+            conn.execute("UPDATE project_easyai_binding SET status='active',last_error='' WHERE project_id=?", (project_id,))
+        return dict(conn.execute('SELECT * FROM project_easyai_binding WHERE project_id=?', (project_id,)).fetchone())
     if not SYNC_ENABLED:
         return dict(existing) if existing else None
     client = EasyAIClient(load_easyai_runtime_config(conn))
     try:
         organization_name = test_org_name(project_name)
-        # A failed local binding must never claim an online organization by name.
-        # If a same-named test org already exists, require manual inspection.
         same_name = client.find_organizations_by_name(organization_name)
-        if same_name:
-            raise RuntimeError(f"发现同名测试组织，拒绝自动认领：{organization_name}")
         parent = client.find_parent_organization(PARENT_ORG_NAME)
         parent_id = organization_id(parent)
-        org = client.create_organization(test_org_name(project_name), parent_id, project_id)
+        if len(same_name) > 1:
+            raise RuntimeError('存在多个同名组织，无法唯一关联')
+        if same_name and str(same_name[0].get('parent') or same_name[0].get('parent_id') or '') != str(parent_id):
+            raise RuntimeError('同名组织不在执行项目组下，请在平台确认组织层级')
+        description = project_date_description(conn, project_id)
+        org = same_name[0] if same_name else client.create_organization(test_org_name(project_name), parent_id, project_id, description=description)
         org_id = organization_id(org)
         if not org_id:
             raise RuntimeError("组织创建响应缺少组织 ID")
+        other = conn.execute('SELECT project_id,status FROM project_easyai_binding WHERE easyai_org_id=? AND project_id<>?', (str(org_id),str(project_id))).fetchone()
+        if other:
+            live = conn.execute('SELECT 1 FROM projects WHERE id=?', (other['project_id'],)).fetchone()
+            members = conn.execute("SELECT 1 FROM project_easyai_member WHERE project_id=? AND status='active'", (other['project_id'],)).fetchone()
+            if live or members or other['status'] not in {'retained', 'deleted'}:
+                raise RuntimeError('同名组织已关联另一个看板项目，无法重复关联')
+            conn.execute('UPDATE project_easyai_binding SET easyai_org_id=NULL WHERE project_id=?', (other['project_id'],))
         conn.execute("""
             INSERT INTO project_easyai_binding (project_id, easyai_org_id, parent_org_id, organization_name, is_test_org, status, updated_at)
             VALUES (?, ?, ?, ?, 1, 'active', datetime('now'))
             ON CONFLICT(project_id) DO UPDATE SET easyai_org_id=excluded.easyai_org_id, parent_org_id=excluded.parent_org_id, organization_name=excluded.organization_name, status='active', last_error='', updated_at=datetime('now')
         """, (project_id, str(org_id), str(parent_id), test_org_name(project_name)))
+        sync_binding_description(conn, project_id, str(org_id), client)
         return dict(conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project_id,)).fetchone())
     except Exception as exc:
         message = redact_error(exc)
@@ -662,6 +683,24 @@ def ensure_binding(conn, project_id, project_name):
         raise
 
 
+def project_date_description(conn, project_id):
+    row = conn.execute('SELECT start_date,end_date FROM projects WHERE id=?', (project_id,)).fetchone()
+    return f"{row['start_date'].replace('-', '')}-{row['end_date'].replace('-', '')}" if row and row['start_date'] and row['end_date'] else ''
+
+
+def sync_binding_description(conn, project_id, org_id, client=None):
+    if not SYNC_ENABLED:
+        return
+    description = project_date_description(conn, project_id)
+    if not description:
+        return
+    saved = conn.execute('SELECT organization_description FROM project_easyai_binding WHERE project_id=?', (project_id,)).fetchone()
+    if saved and saved[0] == description:
+        return
+    (client or EasyAIClient(load_easyai_runtime_config(conn))).update_organization_description(org_id, description)
+    conn.execute('UPDATE project_easyai_binding SET organization_description=? WHERE project_id=?', (description,project_id))
+
+
 def update_project_binding_name(conn, project_id, project_name):
     """Keep an existing project organization name aligned with the project."""
     binding = conn.execute(
@@ -669,6 +708,7 @@ def update_project_binding_name(conn, project_id, project_name):
     ).fetchone()
     if not binding or not binding["easyai_org_id"]:
         return None
+    sync_binding_description(conn, project_id, binding['easyai_org_id'])
     organization_name = test_org_name(project_name)
     if binding["organization_name"] == organization_name:
         return dict(binding)
@@ -693,6 +733,52 @@ def update_project_binding_name(conn, project_id, project_name):
             (message, project_id),
         )
         raise
+
+
+def organization_consistency(conn):
+    """Read current provider state; never infer consistency from local sync history."""
+    if not SYNC_ENABLED or SYNC_MODE != "real":
+        return {"state": "unavailable", "message": "未启用真实组织同步", "projects": 0}
+    client = EasyAIClient(load_easyai_runtime_config(conn))
+    organizations = list(iter_organizations(client.list_organizations()))
+    by_id = {organization_id(org): org for org in organizations}
+    parent_name = PARENT_ORG_NAME
+    parents = [org for org in organizations if str(org.get("name", "")).strip() == parent_name]
+    if len(parents) != 1:
+        return {"state": "error", "message": "执行项目组不存在或名称不唯一", "projects": 0}
+    parent_id = organization_id(parents[0])
+    user_ids = {_user_id(user) for user in client.list_users()}
+    projects = conn.execute("SELECT id, name FROM projects").fetchall()
+    differences = 0
+    for project in projects:
+        binding = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project["id"],)).fetchone()
+        org = by_id.get(str(binding["easyai_org_id"])) if binding else None
+        if not org:
+            differences += 1
+            continue
+        expected = set()
+        unresolved = False
+        for member in project_members(conn, project["id"]):
+            identity = conn.execute("SELECT easyai_user_id, match_status FROM external_user_identity WHERE dashboard_user_id=?", (member["id"],)).fetchone()
+            if not identity or identity["match_status"] not in {"confirmed", "auto_matched"} or str(identity["easyai_user_id"]) not in user_ids:
+                unresolved = True
+            else:
+                expected.add(str(identity["easyai_user_id"]))
+        # Missing membership data is not proof of an empty organization.
+        if not isinstance(org.get("users"), list):
+            raise RuntimeError("平台未返回完整组织成员，无法核对")
+        actual = {_user_id(user) if isinstance(user, dict) else str(user) for user in org["users"]}
+        if int(org.get("userCount", len(actual)) or 0) != len(actual):
+            raise RuntimeError("平台组织成员列表不完整，无法核对")
+        actual_parent = str(org.get("parent") or org.get("parent_id") or org.get("parentId") or "")
+        if unresolved or expected != actual or str(org.get("name", "")) != project["name"] or actual_parent != parent_id:
+            differences += 1
+    orphans = conn.execute("SELECT easyai_org_id FROM project_easyai_binding WHERE project_id NOT IN (SELECT id FROM projects) AND status NOT IN ('retained','deleted')").fetchall()
+    pending_cleanup = sum(str(row["easyai_org_id"]) in by_id for row in orphans if row["easyai_org_id"])
+    running = conn.execute("SELECT COUNT(*) FROM sync_run WHERE status='running'").fetchone()[0]
+    state = "syncing" if running else "different" if differences or pending_cleanup else "consistent" if projects else "empty"
+    messages = {"syncing": "正在同步", "different": "组织信息待同步", "consistent": "组织信息一致", "empty": "暂无项目"}
+    return {"state": state, "message": messages[state], "projects": len(projects), "differentProjects": differences, "pendingCleanup": pending_cleanup}
 
 
 def preview_project(conn, project_id):
@@ -820,7 +906,7 @@ def preview_all_projects(conn):
 def cleanup_deleted_binding(conn, project_id, operator_id="local-admin", client=None):
     """Clean one deleted project only; callers provide the project lock."""
     binding = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (str(project_id),)).fetchone()
-    if not binding or binding["status"] == "deleted":
+    if not binding or binding["status"] in {"deleted", "retained"}:
         return {"project_id": str(project_id), "status": "already_deleted", "removed": 0}
     if not binding["easyai_org_id"]:
         conn.execute("UPDATE project_easyai_binding SET status='deleted', last_error='', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
@@ -840,17 +926,9 @@ def cleanup_deleted_binding(conn, project_id, operator_id="local-admin", client=
     if removal["partial"]:
         conn.execute("UPDATE project_easyai_binding SET status='pending_delete', last_error='成员移除部分失败，等待重试', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
         return {"project_id": str(project_id), "status": "failed", "removed": len(removal["success_ids"]), "removal_result": removal, "retryable": True}
-    if hasattr(client, "validate_owned_organization"):
-        client.validate_owned_organization(binding["easyai_org_id"], binding["parent_org_id"], str(project_id), [], require_empty=True)
-    try:
-        deleted = client.delete_organization(binding["easyai_org_id"], binding["parent_org_id"], str(project_id))
-    except Exception as exc:
-        message = redact_error(exc)
-        conn.execute("UPDATE project_easyai_binding SET status='pending_delete', last_error=?, updated_at=datetime('now') WHERE project_id=?", (message, str(project_id)))
-        return {"project_id": str(project_id), "status": "failed", "removed": len(removal["success_ids"]), "error": message, "retryable": True}
-    conn.execute("UPDATE project_easyai_binding SET status='deleted', last_error='', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
+    conn.execute("UPDATE project_easyai_binding SET status='retained', last_error='', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
     conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, affected_user_ids, result, created_at) VALUES (?, ?, ?, 'project_delete_cleanup', ?, ?, 'succeeded', ?)", (str(uuid.uuid4()), operator_id, str(project_id), binding["easyai_org_id"], json.dumps(removal["success_ids"]), now_ms()))
-    return {"project_id": str(project_id), "status": "deleted", "removed": len(removal["success_ids"]), "delete_result": deleted, "retryable": False}
+    return {"project_id": str(project_id), "status": "retained", "removed": len(removal["success_ids"]), "organization_retained": True, "retryable": False}
 
 
 def sync_all_projects(conn, operator_id="local-admin", coordinator=None):
@@ -860,7 +938,7 @@ def sync_all_projects(conn, operator_id="local-admin", coordinator=None):
     cleanup_results = []
     client = EasyAIClient(load_easyai_runtime_config(conn)) if SYNC_ENABLED else None
     project_ids = {str(item["project"]["id"]) for item in preview["projects"]}
-    orphaned = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id NOT IN (SELECT id FROM projects) AND status <> 'deleted'").fetchall()
+    orphaned = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id NOT IN (SELECT id FROM projects) AND status NOT IN ('deleted','retained')").fetchall()
     for binding in orphaned:
         project_id = str(binding["project_id"])
         try:
