@@ -271,7 +271,7 @@ class EasyAIClient:
             raise RuntimeError("组织更新缺少组织 ID")
         if self.mode == "mock":
             for org in self._mock_orgs.values():
-                if str(org.get("id")) == str(org_id):
+                if organization_id(org) == str(org_id):
                     org["name"] = name
                     return org
             raise RuntimeError(f"未找到组织：{org_id}")
@@ -289,7 +289,7 @@ class EasyAIClient:
         if not user_ids:
             return {"added": 0, "user_ids": []}
         if self.mode == "mock":
-            return {"added": len(user_ids), "user_ids": user_ids, "org_id": org_id}
+            return {"added": len(user_ids), "success_ids": user_ids, "org_id": org_id}
         # The set endpoint replaces a user's organization membership.  Use the
         # additive OpenAPI endpoint so existing organization access is retained.
         path = f"/v1/openapi/organization/{org_id}/users/batch/add"
@@ -303,6 +303,11 @@ class EasyAIClient:
             raise RuntimeError("待删除组织不存在")
         actual_parent = str(org.get("parent") or org.get("parent_id") or org.get("parentId") or "")
         description = str(org.get("description") or "")
+        child_nodes = org.get("children") or []
+        member_count = org.get("member_count", org.get("members_count", org.get("user_count", 0))) or 0
+        balance = org.get("balance", 0) or 0
+        if child_nodes or int(member_count or 0) > 0 or float(balance or 0) > 0:
+            raise RuntimeError("组织仍有子组织、成员或余额，拒绝删除")
         if actual_parent != str(parent_id) or description != f"dashboard project {external_id}":
             raise RuntimeError("组织归属或 Dashboard 标记不匹配，拒绝删除")
         if self.mode == "mock":
@@ -311,7 +316,12 @@ class EasyAIClient:
                     del self._mock_orgs[key]
                     return {"deleted": True, "id": str(org_id)}
             raise RuntimeError("待删除组织不存在")
-        data = self._request("DELETE", f"/organization/{org_id}")
+        try:
+            data = self._request("DELETE", f"/organization/{org_id}")
+        except RuntimeError as exc:
+            if "API 404" in str(exc):
+                return {"deleted": True, "already_deleted": True, "id": str(org_id)}
+            raise
         return data.get("data", data) if isinstance(data, dict) else data
 
     def remove_users_from_organization(self, user_ids, org_id):
@@ -319,7 +329,7 @@ class EasyAIClient:
         if not user_ids:
             return {"removed": 0, "user_ids": []}
         if self.mode == "mock":
-            return {"removed": len(user_ids), "user_ids": user_ids, "org_id": org_id}
+            return {"removed": len(user_ids), "success_ids": user_ids, "org_id": org_id}
         path = f"/v1/openapi/organization/{org_id}/users/batch/remove"
         data = self._request("POST", path, json={"user_ids": user_ids})
         return data.get("data", data) if isinstance(data, dict) else data
@@ -350,20 +360,22 @@ def _batch_result(result, requested_ids, operation):
     """Normalize provider batch responses without claiming partial work succeeded."""
     requested = [str(item) for item in requested_ids]
     body = result if isinstance(result, dict) else {}
-    candidates = body.get("user_ids") or body.get("userIds") or body.get("succeeded_ids") or body.get("success_ids")
-    failed = body.get("failed_ids") or body.get("failed_user_ids") or body.get("errors")
-    if isinstance(candidates, dict):
-        candidates = list(candidates)
-    success_ids = [str(item) for item in candidates] if isinstance(candidates, list) else None
-    failed_ids = [str(item) for item in failed] if isinstance(failed, list) else []
-    if success_ids is None:
-        count_key = "added" if operation == "add" else "removed"
-        count = body.get(count_key)
-        try:
-            count = int(count)
-        except (TypeError, ValueError):
-            count = None
-        success_ids = requested if count is None and not failed_ids else requested[:max(0, min(len(requested), count or 0))]
+    def extract_ids(value):
+        if not isinstance(value, list):
+            return []
+        output = []
+        for item in value:
+            value_id = item.get("id") or item.get("user_id") or item.get("userId") or item.get("_id") if isinstance(item, dict) else item
+            if value_id:
+                output.append(str(value_id))
+        return output
+    candidates = body.get("success_ids") or body.get("succeeded_ids") or body.get("success") or body.get("succeeded")
+    failed = body.get("failed_ids") or body.get("failed_user_ids") or body.get("failed") or body.get("errors")
+    success_ids = extract_ids(candidates)
+    failed_ids = extract_ids(failed)
+    # A count or an echoed user_ids list does not identify which users changed.
+    if not candidates:
+        success_ids = []
     success_ids = [item for item in success_ids if item in requested and item not in failed_ids]
     return {"requested_ids": requested, "success_ids": success_ids, "failed_ids": failed_ids,
             operation: len(success_ids), "partial": len(success_ids) < len(requested), "raw": result}
@@ -702,15 +714,13 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
     if not project:
         raise ValueError("项目不存在")
     run_id = str(uuid.uuid4())
-    member_fingerprint = json.dumps([dict(row) for row in project_members(conn, project_id)], ensure_ascii=False, sort_keys=True)
-    idem = f"project-sync:{project_id}:{hashlib.sha256(member_fingerprint.encode('utf-8')).hexdigest()[:24]}"
+    # Idempotency is evaluated from the live provider relationship on every run.
+    # A historical success must not suppress A -> empty -> A re-entry or retries.
+    idem = f"project-sync:{project_id}:{run_id}"
     started = now_ms()
-    prior = conn.execute("SELECT * FROM sync_run WHERE idempotency_key=?", (idem,)).fetchone()
-    if prior:
-        if prior["status"] == "running":
-            raise RuntimeError("该项目已有同步任务正在运行")
-        details = json.loads(prior["details"] or "{}")
-        return {"success": prior["status"] == "succeeded", "run_id": prior["id"], "idempotent": True, "added": prior["added_count"], "existing": prior["existing_count"], "unmatched": prior["unmatched_count"], "conflict": prior["conflict_count"], "provider": details.get("provider", SYNC_MODE), "simulated": details.get("simulated", SYNC_MODE != "real"), "write_enabled": details.get("write_enabled", SYNC_ENABLED and SYNC_MODE == "real"), "details": details}
+    running = conn.execute("SELECT id FROM sync_run WHERE project_id=? AND status='running' LIMIT 1", (project_id,)).fetchone()
+    if running:
+        raise RuntimeError("该项目已有同步任务正在运行")
     conn.execute("INSERT INTO sync_run (id, project_id, trigger, status, started_at, idempotency_key) VALUES (?, ?, ?, 'running', ?, ?)", (run_id, project_id, trigger, started, idem))
     try:
         binding = ensure_binding(conn, project_id, project["name"])
@@ -795,22 +805,48 @@ def preview_all_projects(conn):
     return {"projects": rows, "totals": totals, "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real"}
 
 
+def cleanup_deleted_binding(conn, project_id, operator_id="local-admin", client=None):
+    """Clean one deleted project only; callers provide the project lock."""
+    binding = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (str(project_id),)).fetchone()
+    if not binding or binding["status"] == "deleted":
+        return {"project_id": str(project_id), "status": "already_deleted", "removed": 0}
+    if not SYNC_ENABLED or not binding["easyai_org_id"]:
+        conn.execute("UPDATE project_easyai_binding SET status='pending_delete', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
+        return {"project_id": str(project_id), "status": "pending_delete", "removed": 0, "retryable": True}
+    client = client or EasyAIClient(load_easyai_runtime_config(conn))
+    member_ids = [str(row["easyai_user_id"]) for row in conn.execute("SELECT easyai_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (str(project_id),)).fetchall()]
+    removal = _batch_result(client.remove_users_from_organization(member_ids, binding["easyai_org_id"]), member_ids, "remove")
+    conn.executemany("UPDATE project_easyai_member SET status='removed', last_synced_at=? WHERE project_id=? AND easyai_user_id=?", [(now_ms(), str(project_id), item) for item in removal["success_ids"]])
+    if removal["partial"]:
+        conn.execute("UPDATE project_easyai_binding SET status='pending_delete', last_error='成员移除部分失败，等待重试', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
+        return {"project_id": str(project_id), "status": "failed", "removed": len(removal["success_ids"]), "removal_result": removal, "retryable": True}
+    try:
+        deleted = client.delete_organization(binding["easyai_org_id"], binding["parent_org_id"], str(project_id))
+    except Exception as exc:
+        message = redact_error(exc)
+        conn.execute("UPDATE project_easyai_binding SET status='pending_delete', last_error=?, updated_at=datetime('now') WHERE project_id=?", (message, str(project_id)))
+        return {"project_id": str(project_id), "status": "failed", "removed": len(removal["success_ids"]), "error": message, "retryable": True}
+    conn.execute("UPDATE project_easyai_binding SET status='deleted', last_error='', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
+    conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, affected_user_ids, result, created_at) VALUES (?, ?, ?, 'project_delete_cleanup', ?, ?, 'succeeded', ?)", (str(uuid.uuid4()), operator_id, str(project_id), binding["easyai_org_id"], json.dumps(removal["success_ids"]), now_ms()))
+    return {"project_id": str(project_id), "status": "deleted", "removed": len(removal["success_ids"]), "delete_result": deleted, "retryable": False}
+
+
 def sync_all_projects(conn, operator_id="local-admin", coordinator=None):
     """Synchronize all live projects and mark deleted-project bindings safely."""
     preview = preview_all_projects(conn)
     results = []
+    cleanup_results = []
     client = EasyAIClient(load_easyai_runtime_config(conn)) if SYNC_ENABLED else None
     project_ids = {str(item["project"]["id"]) for item in preview["projects"]}
-    orphaned = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id NOT IN ({})".format(",".join("?" for _ in project_ids) if project_ids else "NULL"), tuple(project_ids)).fetchall()
+    orphaned = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id NOT IN (SELECT id FROM projects) AND status <> 'deleted'").fetchall()
     for binding in orphaned:
-        member_rows = conn.execute("SELECT easyai_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (binding["project_id"],)).fetchall()
-        member_ids = [str(row["easyai_user_id"]) for row in member_rows]
-        removal_raw = client.remove_users_from_organization(member_ids, binding["easyai_org_id"]) if client and binding["easyai_org_id"] else {"removed": len(member_ids)}
-        removal_result = _batch_result(removal_raw, member_ids, "remove")
-        conn.executemany("UPDATE project_easyai_member SET status='removed', last_synced_at=? WHERE project_id=? AND easyai_user_id=?", [(now_ms(), binding["project_id"], user_id) for user_id in removal_result["success_ids"]])
-        conn.execute("UPDATE project_easyai_binding SET status='pending_delete', last_error='项目已删除，线上组织待人工确认清理', updated_at=datetime('now') WHERE project_id=?", (binding["project_id"],))
-        conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, result, error_code, created_at) VALUES (?, ?, ?, 'global_sync_pending_delete', ?, 'pending_delete', 'PROJECT_DELETED', ?)", (str(uuid.uuid4()), operator_id, binding["project_id"], binding["easyai_org_id"] or "", now_ms()))
-        results.append({"project_id": binding["project_id"], "project_name": binding["organization_name"], "status": "pending_delete", "added": 0, "existing": 0, "unmatched": 0, "conflict": 0, "removed": len(removal_result["success_ids"]), "removal_result": removal_result})
+        project_id = str(binding["project_id"])
+        try:
+            cleanup_results.append((coordinator or ProjectSyncCoordinator()).run(project_id, lambda project_id=project_id: cleanup_deleted_binding(conn, project_id, operator_id, client)))
+        except Exception as exc:
+            message = redact_error(exc)
+            conn.execute("UPDATE project_easyai_binding SET status='pending_delete', last_error=?, updated_at=datetime('now') WHERE project_id=?", (message, project_id))
+            cleanup_results.append({"project_id": project_id, "status": "failed", "error": message, "retryable": True})
     for item in preview["projects"]:
         project = item["project"]
         project_id = str(project["id"])
@@ -821,14 +857,14 @@ def sync_all_projects(conn, operator_id="local-admin", coordinator=None):
             results.append({"project_id": project_id, "project_name": project.get("name", ""), "status": "pending_delete", "added": 0, "existing": 0, "unmatched": 0, "conflict": 0, "removed": 0})
             continue
         try:
-            update_project_binding_name(conn, project_id, project["name"])
-            result = (coordinator or ProjectSyncCoordinator()).run(project_id, lambda: sync_project(conn, project_id, "global", operator_id))
+            project_coordinator = coordinator or ProjectSyncCoordinator()
+            result = project_coordinator.run(project_id, lambda: (update_project_binding_name(conn, project_id, project["name"]), sync_project(conn, project_id, "global", operator_id))[1])
             results.append({"project_id": project_id, "project_name": project["name"], "status": "succeeded" if result.get("success") else "failed", "added": result.get("added", 0), "existing": result.get("existing", 0), "unmatched": result.get("unmatched", 0), "conflict": result.get("conflict", 0), "removed": result.get("removed", 0), "run_id": result.get("run_id"), "error": result.get("error", "")})
         except Exception as exc:
             results.append({"project_id": project_id, "project_name": project.get("name", ""), "status": "failed", "error": redact_error(exc), "added": 0, "existing": 0, "unmatched": 0, "conflict": 0, "removed": 0})
     totals = {key: sum(int(item.get(key, 0) or 0) for item in results) for key in ("added", "existing", "unmatched", "conflict", "removed")}
     totals["failed"] = sum(item["status"] == "failed" for item in results)
-    totals["pending_delete"] = sum(item["status"] == "pending_delete" for item in results)
+    totals["pending_delete"] = sum(item["status"] == "pending_delete" for item in cleanup_results)
     run_id = str(uuid.uuid4())
     conn.execute("INSERT INTO sync_run (id, project_id, trigger, status, started_at, finished_at, added_count, existing_count, unmatched_count, conflict_count, details) VALUES (?, ?, 'global', ?, ?, ?, ?, ?, ?, ?, ?)", (run_id, '__global__', 'succeeded' if totals['failed'] == 0 else 'failed', now_ms(), now_ms(), totals['added'], totals['existing'], totals['unmatched'], totals['conflict'], json.dumps({'projects': results, 'totals': totals}, ensure_ascii=False)))
-    return {"success": totals["failed"] == 0, "run_id": run_id, "projects": results, "totals": totals}
+    return {"success": totals["failed"] == 0 and not any(item.get("status") == "failed" for item in cleanup_results), "run_id": run_id, "projects": results, "cleanup": cleanup_results, "totals": totals}

@@ -201,8 +201,8 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.assertEqual(preview_after['added'], 0)
         self.assertEqual(preview_after['existing'], 1)
         repeat = sync_project(self.conn, 'p-sync')
-        self.assertTrue(repeat['idempotent'])
-        self.assertEqual(repeat['added'], 1)
+        self.assertFalse(repeat.get('idempotent', False))
+        self.assertEqual(repeat['added'], 0)
 
     def test_sync_run_schema_has_existing_count(self):
         columns = {row[1] for row in self.conn.execute("PRAGMA table_info(sync_run)").fetchall()}

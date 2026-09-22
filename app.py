@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env.local'), override=False)
 load_dotenv(override=False)
 
-from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, preview_all_projects, sync_all_projects, refresh_identity_inventory, identity_inventory_preview, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, load_easyai_runtime_config, normalize_bearer_token, mask_secret, EasyAIClient, ProjectSyncCoordinator
+from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, preview_all_projects, sync_all_projects, cleanup_deleted_binding, refresh_identity_inventory, identity_inventory_preview, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, load_easyai_runtime_config, normalize_bearer_token, mask_secret, EasyAIClient, ProjectSyncCoordinator
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
@@ -246,7 +246,11 @@ def update_project(pid):
 
     if 'name' in data:
         try:
-            update_project_binding_name(conn, pid, data['name'])
+            rename_result = project_sync_coordinator.run(pid, lambda: update_project_binding_name(conn, pid, data['name']))
+            if rename_result.get('skipped'):
+                conn.rollback()
+                conn.close()
+                return jsonify({'success': False, 'message': '该项目已有同步任务正在运行'}), 409
         except Exception as exc:
             conn.rollback()
             conn.close()
@@ -1357,7 +1361,7 @@ def get_leave_schedule():
         last_sync_time = int(config.get('leave_sync_last_time', 0))
         return jsonify({
             "intervalHours": interval_hours,
-            "enabled": config.get('leave_sync_enabled', '0') == '1',
+            "enabled": config.get('leave_sync_enabled', '1') == '1',
             "lastSyncTime": last_sync_time,
             "nextSyncTime": last_sync_time + interval_hours * 3600 * 1000 if last_sync_time else 0
         })
@@ -1418,7 +1422,7 @@ def sync_dingtalk_leave_internal(app_key, app_secret):
 
 # 全局定时任务配置
 leave_sync_interval = 4  # 小时
-leave_sync_enabled = False
+leave_sync_enabled = True
 
 def schedule_leave_sync():
     """定时同步请假状态"""
@@ -1608,14 +1612,11 @@ def sync_deleted_project(project_id):
     """Process a deleted project's managed members while retaining a retryable local record."""
     conn = get_db()
     try:
-        binding = conn.execute('SELECT * FROM project_easyai_binding WHERE project_id=?', (str(project_id),)).fetchone()
-        result = sync_all_projects(conn, 'project-delete', project_sync_coordinator)
-        delete_result = None
-        if result.get('success') and binding and binding['easyai_org_id'] and SYNC_ENABLED:
-            delete_result = EasyAIClient(load_easyai_runtime_config(conn)).delete_organization(binding['easyai_org_id'], binding['parent_org_id'], project_id)
-            conn.execute("UPDATE project_easyai_binding SET status='deleted', last_error='', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
+        def run_cleanup():
+            return cleanup_deleted_binding(conn, str(project_id), 'project-delete')
+        result = project_sync_coordinator.run(str(project_id), run_cleanup)
         conn.commit()
-        return {'success': result.get('success', False) and (not SYNC_ENABLED or delete_result is not None or not binding or not binding['easyai_org_id']), 'projectId': str(project_id), 'delete': delete_result, 'retryable': not result.get('success', False)}
+        return {'success': result.get('status') in {'deleted', 'already_deleted'}, 'projectId': str(project_id), 'cleanup': result, 'retryable': result.get('status') == 'failed'}
     except Exception as exc:
         conn.commit()
         return {'success': False, 'projectId': str(project_id), 'error': redact_error(exc), 'retryable': True}
