@@ -4,6 +4,7 @@ WORKDIR /app
 
 # 安装依赖
 COPY requirements.txt .
+ARG PIP_INDEX_URL=https://pypi.org/simple
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制应用代码
