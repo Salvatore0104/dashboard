@@ -546,7 +546,7 @@ a {
   padding: 0 12px;
   font-weight: 800;
   position: sticky;
-  top: var(--nav-h);
+  top: 0;
   z-index: 25;
 }
 
@@ -602,7 +602,7 @@ a {
 .gantt-dates {
   display: flex;
   position: sticky;
-  top: var(--nav-h);
+  top: 0;
   z-index: 10;
   cursor: grab;
 }
