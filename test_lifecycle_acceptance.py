@@ -189,27 +189,48 @@ class LifecycleAcceptanceTests(unittest.TestCase):
         self.assertEqual(response.status_code,200)
         self.assertEqual(self.fake.organizations['org-p-a']['description'],'20260922-20260929')
 
-    def test_project_expiry_clears_members_but_retains_organization(self):
+    def test_archived_project_is_excluded_without_changing_members_or_organization(self):
         self.add_project("p-a")
         self.add_person_assignment("p-a", end=(date.today() + timedelta(days=7)).isoformat())
         self.assertEqual(sync_project(self.conn, "p-a")["added"], 1)
         self.conn.execute("UPDATE projects SET end_date=? WHERE id='p-a'",
                           ((date.today() - timedelta(days=1)).isoformat(),))
         self.conn.commit()
+        self.fake.calls.clear()
         preview = project_sync.preview_project(self.conn, "p-a")
-        self.assertEqual(preview["removed"], 1)
+        self.assertTrue(preview['skipped'])
+        self.assertEqual(preview["removed"], 0)
         result = sync_all_projects(self.conn)
         self.assertTrue(result["success"])
-        self.assertEqual(result["projects"][0]["removed"], 1)
+        self.assertEqual(result["projects"], [])
         self.assertFalse(any(call[0] == "delete_org" for call in self.fake.calls))
         binding = self.conn.execute("SELECT easyai_org_id,status FROM project_easyai_binding WHERE project_id='p-a'").fetchone()
         self.assertEqual(tuple(binding), ("org-p-a", "active"))
-        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_member WHERE project_id='p-a'").fetchone()[0], "removed")
-        # Repeated scheduled sync must keep the same empty organization.
+        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_member WHERE project_id='p-a'").fetchone()[0], "active")
+        # Both direct and scheduled sync leave the archived organization untouched.
+        self.assertTrue(sync_project(self.conn, "p-a", "manual")['skipped'])
         self.assertEqual(sync_project(self.conn, "p-a", "scheduler")["removed"], 0)
-        self.assertFalse(any(call[0] == "delete_org" for call in self.fake.calls))
+        project_sync.ensure_binding(self.conn, 'p-a', 'Changed archived name')
+        project_sync.update_project_binding_name(self.conn, 'p-a', 'Changed archived name')
+        self.assertEqual(self.fake.calls, [])
         self.conn.execute("UPDATE projects SET end_date=? WHERE id='p-a'", (self.today,))
-        self.assertEqual(sync_project(self.conn, "p-a")["added"], 1)
+        self.assertEqual(sync_project(self.conn, "p-a")["existing"], 1)
+
+    def test_archive_filter_keeps_today_and_future_and_excludes_yesterday(self):
+        for pid in ['past', 'today', 'future']:
+            self.add_project(pid)
+        self.conn.execute('UPDATE projects SET end_date=? WHERE id=?', ((date.today()-timedelta(days=1)).isoformat(), 'past'))
+        self.conn.execute('UPDATE projects SET end_date=? WHERE id=?', ((date.today()+timedelta(days=1)).isoformat(), 'future'))
+        self.assertEqual({row['id'] for row in project_sync.syncable_projects(self.conn)}, {'today', 'future'})
+        preview = project_sync.preview_all_projects(self.conn)
+        self.assertEqual({row['project']['id'] for row in preview['projects']}, {'today', 'future'})
+
+    def test_archived_project_does_not_contribute_to_consistency(self):
+        self.add_project('p-a')
+        self.conn.execute('UPDATE projects SET end_date=? WHERE id=?', ((date.today()-timedelta(days=1)).isoformat(), 'p-a'))
+        result = project_sync.organization_consistency(self.conn)
+        self.assertEqual(result['projects'], 0)
+        self.assertEqual(result['differentProjects'], 0)
 
     def test_scheduler_loop_expires_members_and_continues_after_project_failure(self):
         self.add_project("p-a")

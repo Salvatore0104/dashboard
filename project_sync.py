@@ -635,8 +635,25 @@ def identity_inventory_preview(conn, easyai_users):
     return match_identities(conn, members, easyai_users)
 
 
+def project_is_archived(project):
+    return bool(project and project['end_date'] and project['end_date'] < time.strftime('%Y-%m-%d'))
+
+
+def syncable_projects(conn):
+    return [row for row in conn.execute('SELECT * FROM projects ORDER BY start_date, id').fetchall()
+            if not project_is_archived(row)]
+
+
+def archived_sync_result():
+    return {'success': True, 'skipped': True, 'reason': 'archived',
+            'message': '已归档项目不参与组织同步', 'added': 0, 'existing': 0,
+            'removed': 0, 'unmatched': 0, 'conflict': 0, 'write_enabled': False}
+
+
 def ensure_binding(conn, project_id, project_name):
     existing = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project_id,)).fetchone()
+    if project_is_archived(conn.execute('SELECT end_date FROM projects WHERE id=?', (project_id,)).fetchone()):
+        return dict(existing) if existing else None
     if existing and existing["easyai_org_id"]:
         sync_binding_description(conn, project_id, existing['easyai_org_id'])
         if SYNC_ENABLED:
@@ -689,6 +706,8 @@ def project_date_description(conn, project_id):
 
 
 def sync_binding_description(conn, project_id, org_id, client=None):
+    if project_is_archived(conn.execute('SELECT end_date FROM projects WHERE id=?', (project_id,)).fetchone()):
+        return
     if not SYNC_ENABLED:
         return
     description = project_date_description(conn, project_id)
@@ -703,6 +722,8 @@ def sync_binding_description(conn, project_id, org_id, client=None):
 
 def update_project_binding_name(conn, project_id, project_name):
     """Keep an existing project organization name aligned with the project."""
+    if project_is_archived(conn.execute('SELECT end_date FROM projects WHERE id=?', (project_id,)).fetchone()):
+        return archived_sync_result()
     binding = conn.execute(
         "SELECT * FROM project_easyai_binding WHERE project_id=?", (project_id,)
     ).fetchone()
@@ -739,6 +760,11 @@ def organization_consistency(conn):
     """Read current provider state; never infer consistency from local sync history."""
     if not SYNC_ENABLED or SYNC_MODE != "real":
         return {"state": "unavailable", "message": "未启用真实组织同步", "projects": 0}
+    projects = syncable_projects(conn)
+    pending_orphan = conn.execute("SELECT 1 FROM project_easyai_binding WHERE project_id NOT IN (SELECT id FROM projects) AND status NOT IN ('retained','deleted') LIMIT 1").fetchone()
+    if not projects and not pending_orphan:
+        return {'state': 'empty', 'message': '暂无未归档项目', 'projects': 0,
+                'differentProjects': 0, 'pendingCleanup': 0}
     client = EasyAIClient(load_easyai_runtime_config(conn))
     organizations = list(iter_organizations(client.list_organizations()))
     by_id = {organization_id(org): org for org in organizations}
@@ -748,7 +774,6 @@ def organization_consistency(conn):
         return {"state": "error", "message": "执行项目组不存在或名称不唯一", "projects": 0}
     parent_id = organization_id(parents[0])
     user_ids = {_user_id(user) for user in client.list_users()}
-    projects = conn.execute("SELECT id, name FROM projects").fetchall()
     differences = 0
     for project in projects:
         binding = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project["id"],)).fetchone()
@@ -785,6 +810,9 @@ def preview_project(conn, project_id):
     project = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
     if not project:
         raise ValueError("项目不存在")
+    if project_is_archived(project):
+        return {**archived_sync_result(), 'project': dict(project), 'binding': None,
+                'members': [], 'removed_ids': [], 'read_only': True}
     binding = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project_id,)).fetchone()
     members = project_members(conn, project_id)
     client = EasyAIClient(load_easyai_runtime_config(conn))
@@ -811,6 +839,8 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
     project = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
     if not project:
         raise ValueError("项目不存在")
+    if project_is_archived(project):
+        return archived_sync_result()
     run_id = str(uuid.uuid4())
     # Idempotency is evaluated from the live provider relationship on every run.
     # A historical success must not suppress A -> empty -> A re-entry or retries.
@@ -885,7 +915,7 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
 
 def preview_all_projects(conn):
     """Build a read-only global diff, including orphaned project bindings."""
-    projects = conn.execute("SELECT * FROM projects ORDER BY start_date, id").fetchall()
+    projects = syncable_projects(conn)
     rows = []
     for project in projects:
         binding = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project["id"],)).fetchone()

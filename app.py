@@ -18,7 +18,7 @@ load_dotenv(override=False)
 
 from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, preview_all_projects, sync_all_projects, cleanup_deleted_binding, refresh_identity_inventory, identity_inventory_preview, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, load_easyai_runtime_config, normalize_bearer_token, mask_secret, EasyAIClient, ProjectSyncCoordinator
 
-from project_sync import organization_consistency
+from project_sync import organization_consistency, syncable_projects
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 install_access_control(app)
@@ -1784,7 +1784,7 @@ def schedule_project_sync():
             continue
         conn = get_db()
         try:
-            projects = [row['id'] for row in conn.execute('SELECT id FROM projects ORDER BY id').fetchall()]
+            projects = [row['id'] for row in syncable_projects(conn)]
         finally:
             conn.close()
         for project in projects:

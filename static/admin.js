@@ -240,6 +240,12 @@
     await Promise.all(state.projects.map(async (project) => {
       const tag = document.querySelector(`[data-sync-status="${CSS.escape(String(project.id))}"]`);
       if (!tag) return;
+      if (project.end_date && project.end_date < todayStr()) {
+        tag.textContent = '已归档 · 不参与同步';
+        tag.className = 'tag';
+        tag.title = '保留现有平台组织和成员';
+        return;
+      }
       try {
         const data = await fetchJson(`api/project-sync/${encodeURIComponent(project.id)}/status`);
         const binding = data.binding;
@@ -256,6 +262,7 @@
   async function syncProjectToEasyAI(projectId) {
     const project = state.projects.find((item) => String(item.id) === String(projectId));
     if (!project) return;
+    if (project.end_date && project.end_date < todayStr()) return toast('已归档项目不参与组织同步');
     try {
       const preview = await fetchJson(`api/project-sync/${encodeURIComponent(projectId)}/preview`, { method: "POST" });
       if (!preview.success) return toast(preview.message || "无法生成同步预览");
@@ -270,7 +277,7 @@
   }
 
   function openGlobalSyncModal() {
-    els.globalSyncSummary.textContent = "点击“生成预览”读取当前项目组织和成员差异。离开或到期成员将移除，平台组织始终保留；删除组织请前往 wowidea 平台。";
+    els.globalSyncSummary.textContent = "仅同步未归档项目；已归档项目的组织和成员保持原样。未归档项目中离开或排期到期的成员将移除，平台组织保留。";
     els.globalSyncBody.innerHTML = `<tr><td colspan="5" class="table-empty">尚未生成预览</td></tr>`;
     els.globalSyncRunBtn.disabled = true;
     openModal("globalSyncModal");
