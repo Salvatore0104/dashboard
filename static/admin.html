@@ -32,6 +32,7 @@
           </div>
           <div class="toolbar-actions">
             <button class="btn btn-primary" id="addProjectBtn" type="button"><span data-icon="plus"></span>添加项目</button>
+            <button class="btn btn-success" id="globalSyncBtn" type="button"><span data-icon="refresh"></span>同步组织</button>
             <button class="btn btn-success" id="syncPersonsBtn" type="button"><span data-icon="refresh"></span>同步人员</button>
             <button class="btn btn-success" id="syncLeaveBtn" type="button"><span data-icon="refresh"></span>同步请假</button>
             <button class="btn" id="configBtn" type="button"><span data-icon="admin"></span>系统配置</button>
@@ -116,6 +117,24 @@
       <div class="modal-foot">
         <button class="btn" data-close-modal="projectModal" type="button">取消</button>
         <button class="btn btn-primary" id="saveProjectBtn" type="button"><span data-icon="save"></span>保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="globalSyncModal">
+    <div class="modal modal-wide">
+      <div class="modal-head">
+        <h2 class="card-title"><span data-icon="refresh"></span>全局组织同步</h2>
+        <button class="btn btn-sm" data-close-modal="globalSyncModal" type="button"><span data-icon="close"></span></button>
+      </div>
+      <div class="modal-body">
+        <div class="sync-summary" id="globalSyncSummary">点击“生成预览”读取所有项目差异。</div>
+        <div class="table-wrap"><table><thead><tr><th>项目</th><th>组织</th><th>成员差异</th><th>冲突/未匹配</th><th>删除策略</th></tr></thead><tbody id="globalSyncBody"><tr><td colspan="5" class="table-empty">尚未生成预览</td></tr></tbody></table></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-close-modal="globalSyncModal" type="button">关闭</button>
+        <button class="btn btn-primary" id="globalSyncPreviewBtn" type="button"><span data-icon="refresh"></span>生成预览</button>
+        <button class="btn btn-success" id="globalSyncRunBtn" type="button" disabled><span data-icon="play"></span>确认执行</button>
       </div>
     </div>
   </div>
