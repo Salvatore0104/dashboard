@@ -110,7 +110,10 @@ class LifecycleAcceptanceTests(unittest.TestCase):
             CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL,
                 color TEXT DEFAULT '#1890ff', business_trip INTEGER DEFAULT 0, business_trip_start TEXT DEFAULT '',
                 business_trip_end TEXT DEFAULT '', business_trip_persons TEXT DEFAULT '[]');
-            CREATE TABLE persons (id TEXT PRIMARY KEY, name TEXT NOT NULL, group_type TEXT DEFAULT 'pre', ding_id TEXT DEFAULT '', dingtalk_union_id TEXT DEFAULT '');
+            CREATE TABLE persons (id TEXT PRIMARY KEY, name TEXT NOT NULL, group_type TEXT DEFAULT 'pre',
+                avatar TEXT DEFAULT '', ding_id TEXT DEFAULT '', dingtalk_union_id TEXT DEFAULT '',
+                department TEXT DEFAULT '', selected INTEGER DEFAULT 1, sort_order INTEGER DEFAULT 0,
+                leave_status TEXT DEFAULT '', leave_start TEXT DEFAULT '', leave_end TEXT DEFAULT '', leave_type TEXT DEFAULT '');
             CREATE TABLE assignments (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, person_id TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL);
             CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT);
             """
@@ -306,6 +309,23 @@ class LifecycleAcceptanceTests(unittest.TestCase):
         normalized = _batch_result({}, ["easy-a"], "add")
         self.assertEqual(normalized["success_ids"], [])
         self.assertTrue(normalized["partial"])
+
+    def test_person_sync_preserves_existing_visibility_and_union_id(self):
+        self.conn.execute("INSERT INTO persons (id, name, ding_id, dingtalk_union_id, selected) VALUES ('ding-existing', 'Existing', 'ding-existing', 'union-existing', 0)")
+        self.conn.commit()
+        client = dashboard_app.app.test_client()
+        existing = client.post("/api/persons", json={"id": "existing", "name": "Existing Updated", "dingId": "ding-existing", "department": "测试"})
+        self.assertEqual(existing.status_code, 200)
+        row = self.conn.execute("SELECT name, selected, dingtalk_union_id FROM persons WHERE id='ding-existing'").fetchone()
+        self.assertEqual(tuple(row), ("Existing Updated", 0, "union-existing"))
+
+        created = client.post("/api/persons", json={"id": "new-person", "name": "New", "dingId": "ding-new", "department": "测试"})
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(self.conn.execute("SELECT selected FROM persons WHERE id='ding-new'").fetchone()[0], 1)
+
+        updated = client.put("/api/persons/ding-existing", json={"name": "Existing Updated", "groupType": "pre", "avatar": "", "dingId": "ding-existing", "unionId": "union-existing", "department": "测试", "selected": 1})
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(self.conn.execute("SELECT selected FROM persons WHERE id='ding-existing'").fetchone()[0], 1)
 
 
 if __name__ == "__main__":

@@ -507,24 +507,26 @@ def create_person():
         
         if existing:
             # 存在则更新（保留请假状态等原有数据，只更新基本信息）
+            union_id = data.get('unionId', data.get('dingtalkUnionId'))
+            selected = data.get('selected')
             conn.execute('''
                 UPDATE persons SET 
                     name = ?,
                     group_type = ?,
                     avatar = ?,
                     ding_id = ?,
-                    dingtalk_union_id = ?,
+                    dingtalk_union_id = COALESCE(?, dingtalk_union_id),
                     department = ?,
-                    selected = ?
+                    selected = COALESCE(?, selected)
                 WHERE id = ?
             ''', (
                 name,
                 data.get('groupType', 'pre'),
                 data.get('avatar', ''),
                 data.get('dingId', ''),
-                data.get('unionId', data.get('dingtalkUnionId', '')),
+                union_id,
                 data.get('department', ''),
-                1 if data.get('selected') else 0,
+                (1 if selected else 0) if selected is not None else None,
                 pid
             ))
             print(f"[PERSON] 更新人员: id={pid}, name={name}")
@@ -536,7 +538,7 @@ def create_person():
             ''', (
                 pid, name, data.get('groupType', 'pre'), data.get('avatar', ''),
                 data.get('dingId', ''), data.get('unionId', data.get('dingtalkUnionId', '')), data.get('department', ''),
-                1 if data.get('selected') else 0, data.get('sortOrder', 0),
+                1 if data.get('selected', True) else 0, data.get('sortOrder', 0),
                 data.get('leaveStatus', ''), data.get('leaveStart', ''), data.get('leaveEnd', ''),
                 data.get('leaveType', '')
             ))

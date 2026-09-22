@@ -998,6 +998,7 @@
     // 逐个同步，避免 SQLite 并发锁问题
     for (const user of users) {
       try {
+        const existing = state.persons.find((person) => String(person.id) === String(user.id || user.dingId));
         const res = await fetchJson("api/persons", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1006,9 +1007,9 @@
             dingId: user.dingId || user.id,
             name: user.name,
             avatar: user.avatar || "",
+            unionId: user.unionId || user.dingtalkUnionId || existing?.dingtalk_union_id || "",
             department: user.department || "",
-            groupType: inferGroupType(user.department || user.title || ""),
-            selected: true
+            groupType: inferGroupType(user.department || user.title || "")
           })
         });
         if (res.success) successCount++;

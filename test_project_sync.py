@@ -290,6 +290,13 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.assertIn('openActionConfirm("确认删除人员"', js)
         self.assertNotIn('if (!confirm("确定删除此人员及其全部分配吗？")) return;', js)
 
+    def test_person_sync_preserves_visibility_and_union_id(self):
+        app_source = Path(__file__).with_name("app.py").read_text(encoding="utf-8")
+        js = Path(__file__).with_name("static").joinpath("admin.js").read_text(encoding="utf-8")
+        self.assertIn("dingtalk_union_id = COALESCE(?, dingtalk_union_id)", app_source)
+        self.assertIn("selected = COALESCE(?, selected)", app_source)
+        self.assertIn("unionId: user.unionId || user.dingtalkUnionId || existing?.dingtalk_union_id || \"\"", js)
+
 
 if __name__ == "__main__":
     unittest.main()
