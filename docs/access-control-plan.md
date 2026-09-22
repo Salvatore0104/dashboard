@@ -57,5 +57,6 @@ npx --yes --package @playwright/cli playwright-cli -s=dashboard-access run-code 
 归档项目的创建绑定、名称和日期描述更新均不调用平台，现有组织及成员保持原样。
 这取代旧的“项目到期后清空组织成员”行为；未归档项目内的到期排期成员处理、显式删除项目的清理策略不变。
 日期延长至未归档范围后重新参与同步。新增边界与一致性测试，并将旧的到期清成员测试改为归档不变更测试。
+追加回归验证归档项目仍可本地编辑，不将“归档跳过”误判为同步锁冲突；实际定时循环仅选取未归档项目。当前完整测试共 68 项。
 
 真实主站只读补充核对：2026-09-22 实际 `/custom/kaoqin` 页面使用同源 `https://wowidea.top/kaoqin/tv.html?theme=dark&lang=zh-CN` iframe，未设置 sandbox；伪造 Bearer 调用 self/introspect 均返回 401。这不等于新版生产反代与真实角色验收已完成。

@@ -300,7 +300,7 @@ def update_project(pid):
         try:
             project_name = conn.execute('SELECT name FROM projects WHERE id=?', (pid,)).fetchone()['name']
             rename_result = project_sync_coordinator.run(pid, lambda: update_project_binding_name(conn, pid, project_name))
-            if rename_result.get('skipped'):
+            if rename_result.get('skipped') and rename_result.get('reason') != 'archived':
                 conn.rollback()
                 conn.close()
                 return jsonify({'success': False, 'message': '该项目已有同步任务正在运行'}), 409

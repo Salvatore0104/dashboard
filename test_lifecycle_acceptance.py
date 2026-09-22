@@ -232,6 +232,25 @@ class LifecycleAcceptanceTests(unittest.TestCase):
         self.assertEqual(result['projects'], 0)
         self.assertEqual(result['differentProjects'], 0)
 
+    def test_archived_project_edit_stays_local_and_scheduler_skips_it(self):
+        self.add_project('archived')
+        self.add_project('current')
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        self.conn.execute('UPDATE projects SET end_date=? WHERE id=?', (yesterday, 'archived'))
+        self.conn.commit()
+        response = dashboard_app.app.test_client().put('/api/projects/archived', json={
+            'name': 'Local archived rename', 'endDate': yesterday})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json['success'])
+        self.assertEqual(self.conn.execute('SELECT name FROM projects WHERE id=?', ('archived',)).fetchone()[0], 'Local archived rename')
+        self.assertEqual(self.fake.calls, [])
+        with patch.object(dashboard_app, 'PROJECT_SYNC_SCHEDULER_ENABLED', True), \
+             patch.object(dashboard_app.project_sync_wake, 'wait', side_effect=[False, InterruptedError]), \
+             patch.object(dashboard_app, 'sync_project', return_value={'success': True}) as sync:
+            with self.assertRaises(InterruptedError):
+                dashboard_app.schedule_project_sync()
+        self.assertEqual([call.args[1] for call in sync.call_args_list], ['current'])
+
     def test_scheduler_loop_expires_members_and_continues_after_project_failure(self):
         self.add_project("p-a")
         self.add_person_assignment("p-a")
