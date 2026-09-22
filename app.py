@@ -1172,7 +1172,10 @@ def export_data():
             'config': safe_config
         }
         
-        return jsonify({"success": True, "data": data})
+        response = jsonify({"success": True, "data": data})
+        response.headers["Content-Disposition"] = 'attachment; filename="dashboard-export.json"'
+        response.headers["Content-Type"] = "application/json; charset=utf-8"
+        return response
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
 

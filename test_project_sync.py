@@ -274,6 +274,14 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.assertIn("actionConfirmBtn.disabled = true", js)
         self.assertNotIn('if (!confirm("确定删除此项目及其全部分配吗？")) return;', js)
 
+    def test_json_export_is_downloaded_without_navigation(self):
+        app_source = Path(__file__).with_name("app.py").read_text(encoding="utf-8")
+        js = Path(__file__).with_name("static").joinpath("admin.js").read_text(encoding="utf-8")
+        self.assertIn('Content-Disposition"] = \'attachment; filename="dashboard-export.json"\'', app_source)
+        self.assertIn('byId("exportJsonBtn").addEventListener("click", downloadJsonExport)', js)
+        self.assertIn('link.download = "dashboard-export.json"', js)
+        self.assertNotIn('location.href = "api/export"', js)
+
 
 if __name__ == "__main__":
     unittest.main()

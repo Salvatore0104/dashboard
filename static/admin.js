@@ -79,7 +79,7 @@
     byId("bindPersonsBtn").addEventListener("click", openBindingModal);
     byId("configBtn").addEventListener("click", openConfigModal);
     byId("syncLeaveBtn").addEventListener("click", syncLeaveNow);
-    byId("exportJsonBtn").addEventListener("click", () => location.href = "api/export");
+    byId("exportJsonBtn").addEventListener("click", downloadJsonExport);
     byId("exportCsvBtn").addEventListener("click", () => location.href = "api/export/assignments/csv");
     byId("saveProjectBtn").addEventListener("click", saveProject);
     byId("saveBusinessTripBtn").addEventListener("click", saveBusinessTrip);
@@ -1050,6 +1050,23 @@
   function closeModal(id) {
     byId(id).classList.remove("open");
     if (id === "actionConfirmModal") state.confirmAction = null;
+  }
+
+  async function downloadJsonExport() {
+    try {
+      const response = await fetch("api/export");
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "dashboard-export.json";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      toast("JSON 导出已下载");
+    } catch (error) { toast(error.message || "JSON 导出失败"); }
   }
   function toast(message) {
     els.toast.textContent = message;
