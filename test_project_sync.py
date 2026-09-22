@@ -8,7 +8,7 @@ from pathlib import Path
 os.environ.setdefault("EASYAI_SYNC_MODE", "mock")
 os.environ.setdefault("EASYAI_SYNC_ENABLED", "true")
 
-from project_sync import EasyAIClient, ProjectSyncCoordinator, encrypt_secret, ensure_tables, ensure_binding, iter_organizations, load_easyai_runtime_config, match_identities, normalize_name, organization_id, persist_identity_matches, preview_project, redact_error, sync_project, test_org_name
+from project_sync import EasyAIClient, ProjectSyncCoordinator, encrypt_secret, ensure_tables, ensure_binding, iter_organizations, load_easyai_runtime_config, match_identities, normalize_name, organization_id, persist_identity_matches, preview_project, refresh_identity_inventory, redact_error, sync_project, test_org_name
 
 
 class ProjectSyncUnitTests(unittest.TestCase):
@@ -77,6 +77,15 @@ class ProjectSyncUnitTests(unittest.TestCase):
         result = match_identities(self.conn, members, [{'id': 'easy-1', 'dingtalk_user_id': 'ding-1'}])[0]
         self.assertEqual(result['easyai_user_id'], 'easy-1')
         self.assertTrue(result['name_changed'])
+
+    def test_refresh_identity_inventory_persists_full_review(self):
+        self.conn.execute("INSERT INTO persons (id, name, ding_id, dingtalk_union_id) VALUES ('person-1', '张三', 'ding-1', 'union-1')")
+        self.conn.execute("INSERT INTO persons (id, name, ding_id, dingtalk_union_id) VALUES ('person-2', '李四', '', '')")
+        rows = refresh_identity_inventory(self.conn, [{'id': 'easy-1', 'username': 'dingtalk_ding-1'}, {'id': 'easy-2', 'name': '李四'}])
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM external_user_identity").fetchone()[0], 2)
+        self.assertEqual(self.conn.execute("SELECT match_status FROM external_user_identity WHERE dashboard_user_id='person-1'").fetchone()[0], 'auto_matched')
+        self.assertEqual(self.conn.execute("SELECT match_status FROM external_user_identity WHERE dashboard_user_id='person-2'").fetchone()[0], 'candidate')
 
     def test_persist_rejects_duplicate_easyai_identity(self):
         matches = [

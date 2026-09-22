@@ -528,6 +528,25 @@ def persist_identity_matches(conn, matches, operator_id=""):
     return persisted
 
 
+def refresh_identity_inventory(conn, easyai_users, operator_id=""):
+    """Review every dashboard person against platform users without name-only binding."""
+    members = [dict(row) for row in conn.execute("SELECT id, name, ding_id, COALESCE(dingtalk_union_id, '') AS dingtalk_union_id FROM persons ORDER BY name").fetchall()]
+    matches = match_identities(conn, members, easyai_users)
+    persisted = persist_identity_matches(conn, matches, operator_id)
+    persisted_ids = {item["dashboard_user_id"] for item in persisted}
+    for item in matches:
+        if item["dashboard_user_id"] in persisted_ids:
+            continue
+        # Keep unresolved rows visible to reviewers, but never assign a platform ID.
+        conn.execute("""
+            INSERT INTO external_user_identity (dashboard_user_id, dingtalk_user_id, dingtalk_union_id, dingtalk_open_id, display_name, normalized_name, easyai_user_id, match_status, match_source, match_score, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, 0, datetime('now'))
+            ON CONFLICT(dashboard_user_id) DO UPDATE SET dingtalk_user_id=excluded.dingtalk_user_id, dingtalk_union_id=excluded.dingtalk_union_id, dingtalk_open_id=excluded.dingtalk_open_id, display_name=excluded.display_name, normalized_name=excluded.normalized_name, match_status=excluded.match_status, match_source=excluded.match_source, updated_at=datetime('now')
+        """, (item["dashboard_user_id"], item.get("dingtalk_user_id", ""), item.get("dingtalk_union_id", ""), item.get("dingtalk_open_id", ""), item["name"], normalize_name(item["name"]), item["status"], item.get("match_source", "")))
+    conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, affected_user_ids, result, created_at) VALUES (?, ?, '', 'identity_refresh', ?, 'succeeded', ?)", (str(uuid.uuid4()), operator_id, json.dumps([item["dashboard_user_id"] for item in matches]), now_ms()))
+    return matches
+
+
 def ensure_binding(conn, project_id, project_name):
     existing = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project_id,)).fetchone()
     if existing and existing["easyai_org_id"]:
@@ -675,3 +694,52 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
         conn.execute("UPDATE project_easyai_binding SET status='error', last_error=?, updated_at=datetime('now') WHERE project_id=?", (message, project_id))
         conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, result, error_code, created_at) VALUES (?, ?, ?, 'project_sync', 'failed', ?, ?)", (str(uuid.uuid4()), operator_id, project_id, message[:120], now_ms()))
         raise
+
+
+def preview_all_projects(conn):
+    """Build a read-only global diff, including orphaned project bindings."""
+    projects = conn.execute("SELECT * FROM projects ORDER BY start_date, id").fetchall()
+    project_ids = {str(row["id"]) for row in projects}
+    rows = []
+    for project in projects:
+        binding = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project["id"],)).fetchone()
+        item = preview_project(conn, project["id"])
+        item["organization_action"] = "existing" if binding and binding["easyai_org_id"] else "create"
+        item["name_action"] = "unchanged"
+        if binding and binding["organization_name"] != test_org_name(project["name"]):
+            item["name_action"] = "rename"
+        item["parent_action"] = "unchanged"
+        rows.append(item)
+    orphaned = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id NOT IN ({})".format(",".join("?" for _ in project_ids) if project_ids else "NULL"), tuple(project_ids)).fetchall()
+    for binding in orphaned:
+        rows.append({"project": {"id": binding["project_id"], "name": binding["organization_name"]}, "binding": dict(binding), "members": [], "added": 0, "existing": 0, "unmatched": 0, "conflict": 0, "removed": 0, "organization_action": "pending_delete", "name_action": "unchanged", "parent_action": "unchanged", "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real"})
+    totals = {key: sum(int(item.get(key, 0) or 0) for item in rows) for key in ("added", "existing", "unmatched", "conflict", "removed")}
+    totals["create_org"] = sum(item.get("organization_action") == "create" for item in rows)
+    totals["rename_org"] = sum(item.get("name_action") == "rename" for item in rows)
+    totals["pending_delete"] = sum(item.get("organization_action") == "pending_delete" for item in rows)
+    return {"projects": rows, "totals": totals, "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real"}
+
+
+def sync_all_projects(conn, operator_id="local-admin"):
+    """Synchronize all live projects and mark deleted-project bindings safely."""
+    preview = preview_all_projects(conn)
+    results = []
+    for item in preview["projects"]:
+        project = item["project"]
+        project_id = str(project["id"])
+        binding = item.get("binding")
+        if item.get("organization_action") == "pending_delete":
+            conn.execute("UPDATE project_easyai_binding SET status='pending_delete', last_error='项目已删除，线上组织待人工确认清理', updated_at=datetime('now') WHERE project_id=?", (project_id,))
+            conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, result, error_code, created_at) VALUES (?, ?, ?, 'global_sync_pending_delete', ?, 'pending_delete', 'PROJECT_DELETED', ?)", (str(uuid.uuid4()), operator_id, project_id, binding.get("easyai_org_id", "") if binding else "", now_ms()))
+            results.append({"project_id": project_id, "project_name": project.get("name", ""), "status": "pending_delete", "added": 0, "existing": 0, "unmatched": 0, "conflict": 0, "removed": 0})
+            continue
+        try:
+            update_project_binding_name(conn, project_id, project["name"])
+            result = sync_project(conn, project_id, "global", operator_id)
+            results.append({"project_id": project_id, "project_name": project["name"], "status": "succeeded", "added": result.get("added", 0), "existing": result.get("existing", 0), "unmatched": result.get("unmatched", 0), "conflict": result.get("conflict", 0), "removed": result.get("removed", 0), "run_id": result.get("run_id")})
+        except Exception as exc:
+            results.append({"project_id": project_id, "project_name": project.get("name", ""), "status": "failed", "error": redact_error(exc), "added": 0, "existing": 0, "unmatched": 0, "conflict": 0, "removed": 0})
+    totals = {key: sum(int(item.get(key, 0) or 0) for item in results) for key in ("added", "existing", "unmatched", "conflict", "removed")}
+    totals["failed"] = sum(item["status"] == "failed" for item in results)
+    totals["pending_delete"] = sum(item["status"] == "pending_delete" for item in results)
+    return {"success": totals["failed"] == 0, "projects": results, "totals": totals}

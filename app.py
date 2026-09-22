@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env.local'), override=False)
 load_dotenv(override=False)
 
-from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, load_easyai_runtime_config, normalize_bearer_token, mask_secret, EasyAIClient, ProjectSyncCoordinator
+from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, preview_all_projects, sync_all_projects, refresh_identity_inventory, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, load_easyai_runtime_config, normalize_bearer_token, mask_secret, EasyAIClient, ProjectSyncCoordinator
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
@@ -328,12 +328,63 @@ def project_sync_runs():
     return jsonify([dict(row) for row in rows])
 
 
+@app.route('/api/project-sync/global/preview', methods=['POST'])
+def project_sync_global_preview():
+    conn = get_db()
+    try:
+        return jsonify({'success': True, **preview_all_projects(conn)})
+    except Exception as exc:
+        return jsonify({'success': False, 'message': redact_error(exc)}), 400
+    finally:
+        conn.close()
+
+
+@app.route('/api/project-sync/global/run', methods=['POST'])
+def project_sync_global_run():
+    data = request.json or {}
+    def run_one():
+        conn = get_db()
+        try:
+            result = sync_all_projects(conn, data.get('operatorId', 'local-admin'))
+            conn.commit()
+            broadcast('projects_changed', {'action': 'global_sync'})
+            return result
+        except Exception as exc:
+            conn.commit()
+            raise RuntimeError(redact_error(exc)) from exc
+        finally:
+            conn.close()
+    try:
+        result = project_sync_coordinator.run('__global__', run_one)
+        if result.get('skipped'):
+            return jsonify({'success': False, 'message': '全局同步任务正在运行', **result}), 409
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({'success': False, 'message': redact_error(exc)}), 400
+
+
 @app.route('/api/project-sync/identities', methods=['GET'])
 def project_sync_identities():
     conn = get_db()
     rows = conn.execute('SELECT * FROM external_user_identity ORDER BY match_status, display_name').fetchall()
     conn.close()
     return jsonify([dict(row) for row in rows])
+
+
+@app.route('/api/project-sync/identities/refresh', methods=['POST'])
+def refresh_project_sync_identities():
+    conn = get_db()
+    try:
+        client = EasyAIClient(load_easyai_runtime_config(conn))
+        users = client.list_users()
+        matches = refresh_identity_inventory(conn, users, (request.json or {}).get('operatorId', 'local-admin'))
+        conn.commit()
+        return jsonify({'success': True, 'total': len(matches), 'matched': sum(item['status'] in {'auto_matched', 'confirmed'} for item in matches), 'candidate': sum(item['status'] == 'candidate' for item in matches), 'unmatched': sum(item['status'] == 'unmatched' for item in matches), 'conflict': sum(item['status'] == 'conflict' for item in matches)})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({'success': False, 'message': redact_error(exc)}), 400
+    finally:
+        conn.close()
 
 
 @app.route('/api/project-sync/identities/<user_id>/confirm', methods=['POST'])

@@ -23,7 +23,9 @@
     selectedColor: CANDY_COLORS[0],
     businessTripProjectId: null,
     syncUsers: [],
-    syncDeptFilter: ""
+    syncDeptFilter: "",
+    globalSyncPreview: null,
+    identityByDingId: new Map()
   };
   const els = {};
 
@@ -40,6 +42,7 @@
     [
       "navTitle", "projectBody", "personList", "leaveRecordList", "projectCount", "personCount", "leaveRecordCount",
       "projectModal", "businessTripModal", "syncPersonsModal", "leaveModal", "configModal", "toast",
+      "globalSyncModal", "globalSyncSummary", "globalSyncBody", "globalSyncPreviewBtn", "globalSyncRunBtn",
       "projectModalTitle", "projectName", "projectStart", "projectEnd", "projectColorPicker",
       "btProjectId", "btProjectName", "projectBusinessTrip", "projectBusinessTripStart", "projectBusinessTripEnd", "businessTripPersons",
       "syncPersonsList", "syncPersonsStatus", "leavePersonName", "leaveType", "leaveStart", "leaveEnd",
@@ -57,6 +60,9 @@
 
   function bind() {
     byId("addProjectBtn").addEventListener("click", () => openProjectModal());
+    byId("globalSyncBtn").addEventListener("click", openGlobalSyncModal);
+    els.globalSyncPreviewBtn.addEventListener("click", previewGlobalSync);
+    els.globalSyncRunBtn.addEventListener("click", runGlobalSync);
     byId("syncPersonsBtn").addEventListener("click", openSyncPersonsModal);
     byId("configBtn").addEventListener("click", openConfigModal);
     byId("syncLeaveBtn").addEventListener("click", syncLeaveNow);
@@ -72,7 +78,7 @@
     byId("resetConfigBtn").addEventListener("click", resetConfigDefaults);
     byId("testDingTalkBtn").addEventListener("click", testDingTalk);
     byId("testEasyAIKeyBtn").addEventListener("click", testEasyAIConnection);
-    els.refreshIdentityBtn.addEventListener("click", loadIdentities);
+    els.refreshIdentityBtn.addEventListener("click", refreshIdentities);
     byId("saveEasyAICredentialsBtn").addEventListener("click", saveEasyAICredentials);
     byId("editDingBtn").addEventListener("click", enableDingEdit);
     byId("saveDingBtn").addEventListener("click", saveDingConfig);
@@ -103,6 +109,7 @@
     if (!els.identityBody) return;
     try {
       const rows = await fetchJson("api/project-sync/identities");
+      state.identityByDingId = new Map(rows.filter((row) => row.dingtalk_user_id).map((row) => [String(row.dingtalk_user_id), row]));
       if (!rows.length) {
         els.identityBody.innerHTML = `<tr><td colspan="5" class="table-empty">暂无身份记录。先执行项目同步预览或同步钉钉人员。</td></tr>`;
         return;
@@ -123,6 +130,14 @@
     } catch (error) {
       els.identityBody.innerHTML = `<tr><td colspan="5" class="table-empty">${esc(error.message || "读取失败")}</td></tr>`;
     }
+  }
+
+  async function refreshIdentities() {
+    const result = await fetchJson("api/project-sync/identities/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) }).catch((error) => ({ success: false, message: error.message }));
+    if (!result.success) return toast(result.message || "身份盘点失败");
+    toast(`身份盘点完成：已绑定 ${result.matched}，候选 ${result.candidate}，未匹配 ${result.unmatched}，冲突 ${result.conflict}`);
+    await loadIdentities();
+    if (state.syncUsers.length) renderSyncUsers();
   }
 
   function applyThemeConfig() {
@@ -161,14 +176,12 @@
         <td class="actions">
           <button class="btn btn-sm" data-edit-project="${esc(p.id)}">${Icons.svg("admin")}编辑</button>
           <button class="btn btn-warning btn-sm" data-trip-project="${esc(p.id)}">${Icons.svg("plane")}出差</button>
-          <button class="btn btn-success btn-sm" data-sync-project="${esc(p.id)}">${Icons.svg("refresh")}同步组织</button>
           <button class="btn btn-danger btn-sm" data-delete-project="${esc(p.id)}">${Icons.svg("trash")}删除</button>
         </td>
       </tr>`;
     }).join("");
     els.projectBody.querySelectorAll("[data-edit-project]").forEach((btn) => btn.addEventListener("click", () => openProjectModal(btn.dataset.editProject)));
     els.projectBody.querySelectorAll("[data-trip-project]").forEach((btn) => btn.addEventListener("click", () => openBusinessTripModal(btn.dataset.tripProject)));
-    els.projectBody.querySelectorAll("[data-sync-project]").forEach((btn) => btn.addEventListener("click", () => syncProjectToEasyAI(btn.dataset.syncProject)));
     els.projectBody.querySelectorAll("[data-delete-project]").forEach((btn) => btn.addEventListener("click", () => deleteProject(btn.dataset.deleteProject)));
     loadProjectSyncStatuses();
   }
@@ -203,6 +216,62 @@
       await loadProjectSyncStatuses();
     } catch (error) {
       toast(error.message || "同步失败");
+    }
+  }
+
+  function openGlobalSyncModal() {
+    els.globalSyncSummary.textContent = "点击“生成预览”读取所有项目组织和成员差异。删除线上组织默认只标记待处理。";
+    els.globalSyncBody.innerHTML = `<tr><td colspan="5" class="table-empty">尚未生成预览</td></tr>`;
+    els.globalSyncRunBtn.disabled = true;
+    openModal("globalSyncModal");
+    previewGlobalSync();
+  }
+
+  function renderGlobalSyncPreview(data) {
+    const totals = data.totals || {};
+    els.globalSyncSummary.textContent = `项目 ${data.projects?.length || 0} 个：新增组织 ${totals.create_org || 0}，改名 ${totals.rename_org || 0}，新增成员 ${totals.added || 0}，已存在 ${totals.existing || 0}，未匹配 ${totals.unmatched || 0}，冲突 ${totals.conflict || 0}，待处理删除 ${totals.pending_delete || 0}。`;
+    els.globalSyncBody.innerHTML = (data.projects || []).map((item) => {
+      const p = item.project || {};
+      const org = item.organization_action === "create" ? "待创建" : item.organization_action === "pending_delete" ? "项目已删除" : (item.binding?.organization_name || "已绑定");
+      const member = `新增 ${item.added || 0} / 已存在 ${item.existing || 0}`;
+      const issues = `冲突 ${item.conflict || 0} / 未匹配 ${item.unmatched || 0}`;
+      const removal = item.organization_action === "pending_delete" ? "仅标记，不删除线上组织" : "离开成员仅标记待移除";
+      return `<tr><td>${esc(p.name || p.id)}</td><td>${esc(org)}${item.name_action === "rename" ? " · 待改名" : ""}</td><td>${member}</td><td>${issues}</td><td>${removal}</td></tr>`;
+    }).join("") || `<tr><td colspan="5" class="table-empty">暂无项目</td></tr>`;
+    els.globalSyncRunBtn.disabled = !data.projects?.length;
+  }
+
+  async function previewGlobalSync() {
+    els.globalSyncPreviewBtn.disabled = true;
+    try {
+      const data = await fetchJson("api/project-sync/global/preview", { method: "POST" });
+      if (!data.success) throw new Error(data.message || "生成预览失败");
+      state.globalSyncPreview = data;
+      renderGlobalSyncPreview(data);
+    } catch (error) {
+      els.globalSyncSummary.textContent = error.message || "生成预览失败";
+      els.globalSyncRunBtn.disabled = true;
+    } finally {
+      els.globalSyncPreviewBtn.disabled = false;
+    }
+  }
+
+  async function runGlobalSync() {
+    if (!state.globalSyncPreview) return previewGlobalSync();
+    const totals = state.globalSyncPreview.totals || {};
+    if (!confirm(`确认执行全局同步？\n\n新增组织 ${totals.create_org || 0}，新增成员 ${totals.added || 0}，待处理删除 ${totals.pending_delete || 0}。\n\n线上组织不会自动删除，离开成员仅记录待处理。`)) return;
+    els.globalSyncRunBtn.disabled = true;
+    try {
+      const result = await fetchJson("api/project-sync/global/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) });
+      if (!result.success) throw new Error(result.message || "全局同步失败");
+      const t = result.totals || {};
+      toast(`全局同步完成：新增成员 ${t.added || 0}，失败项目 ${t.failed || 0}，待处理删除 ${t.pending_delete || 0}`);
+      renderGlobalSyncPreview({ projects: result.projects, totals: t });
+      await loadAll();
+    } catch (error) {
+      toast(error.message || "全局同步失败");
+    } finally {
+      els.globalSyncRunBtn.disabled = false;
     }
   }
 
@@ -710,6 +779,7 @@
       return toast(data.message || "获取钉钉人员失败");
     }
     state.syncUsers = Array.isArray(data.data) ? data.data : [];
+    await refreshIdentities();
     // 保存到 sessionStorage，刷新页面后可恢复
     try {
       sessionStorage.setItem("dingtalk_sync_users", JSON.stringify(state.syncUsers));
@@ -742,11 +812,13 @@
     const renderUserCard = (user) => {
       const id = user.id || user.dingId;
       const existing = state.persons.some((p) => String(p.id) === String(id) || String(p.ding_id) === String(id));
+      const identity = state.identityByDingId.get(String(id));
+      const binding = identity?.easyai_user_id ? `已绑定 · ${identity.easyai_user_id}` : (identity?.match_status === "conflict" ? "身份冲突" : (identity?.match_status === "candidate" ? "待确认候选" : "未绑定"));
       return `<label class="sync-user-card ${existing ? "existing" : ""}">
         <input type="checkbox" value="${esc(id)}" ${existing ? "disabled" : ""}>
         <span class="person-dot" style="background:${personColor({ department: user.department || "", group_type: inferGroupType(user.department || user.title || "") })}">${esc(String(user.name || "?").slice(0, 1))}</span>
         <span class="person-main"><strong>${esc(user.name || "未命名")}</strong><small>${esc(user.department || "未分组")}</small></span>
-        ${existing ? '<span class="tag">已存在</span>' : '<span class="tag tag-primary">新人员</span>'}
+        <span class="tag ${identity?.easyai_user_id ? "tag-primary" : ""}">${esc(binding)}</span>
       </label>`;
     };
 
