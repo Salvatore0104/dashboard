@@ -265,7 +265,8 @@ def delete_project(pid):
     conn.commit()
     conn.close()
     broadcast('projects_changed', {'action': 'delete', 'id': pid})
-    return jsonify({'success': True})
+    sync_status = sync_deleted_project(pid)
+    return jsonify({'success': True, 'sync': sync_status})
 
 # ==================== 项目组织同步 API ====================
 
@@ -362,7 +363,7 @@ def project_sync_global_run():
     def run_one():
         conn = get_db()
         try:
-            result = sync_all_projects(conn, data.get('operatorId', 'local-admin'))
+            result = sync_all_projects(conn, data.get('operatorId', 'local-admin'), project_sync_coordinator)
             conn.commit()
             broadcast('projects_changed', {'action': 'global_sync'})
             return result
@@ -423,10 +424,12 @@ def bind_all_project_sync_identities():
     try:
         operator_id = (request.json or {}).get('operatorId', 'local-admin')
         users = EasyAIClient(load_easyai_runtime_config(conn)).list_users()
+        before = {str(row['dashboard_user_id']) for row in conn.execute("SELECT dashboard_user_id FROM external_user_identity WHERE easyai_user_id<>'' AND match_status IN ('auto_matched','confirmed')").fetchall()}
         matches = refresh_identity_inventory(conn, users, operator_id)
-        bound = sum(item['status'] == 'auto_matched' for item in matches)
+        new_bound = sum(item['status'] == 'auto_matched' and item['dashboard_user_id'] not in before for item in matches)
+        existing_bound = sum(item['status'] in {'auto_matched', 'confirmed'} and item['dashboard_user_id'] in before for item in matches)
         conn.commit()
-        return jsonify({'success': True, 'total': len(matches), 'bound': bound, 'matched': sum(item['status'] in {'auto_matched', 'confirmed'} for item in matches), 'candidate': sum(item['status'] == 'candidate' for item in matches), 'unmatched': sum(item['status'] == 'unmatched' for item in matches), 'conflict': sum(item['status'] == 'conflict' for item in matches)})
+        return jsonify({'success': True, 'total': len(matches), 'bound': new_bound, 'newBound': new_bound, 'existingBound': existing_bound, 'matched': sum(item['status'] in {'auto_matched', 'confirmed'} for item in matches), 'candidate': sum(item['status'] == 'candidate' for item in matches), 'unmatched': sum(item['status'] == 'unmatched' for item in matches), 'conflict': sum(item['status'] == 'conflict' for item in matches)})
     except Exception as exc:
         conn.rollback()
         return jsonify({'success': False, 'message': redact_error(exc)}), 400
@@ -620,12 +623,17 @@ def create_assignment():
         conn.close()
     
     broadcast('assignments_changed', {'action': 'create', 'id': aid})
-    return jsonify({'success': True, 'id': aid})
+    sync_status = sync_assignment_project(data['projectId'], 'assignment_create')
+    return jsonify({'success': True, 'id': aid, 'sync': sync_status})
 
 @app.route('/api/assignments/<aid>', methods=['PUT'])
 def update_assignment(aid):
     data = request.json
     conn = get_db()
+    assignment = conn.execute('SELECT project_id FROM assignments WHERE id=?', (aid,)).fetchone()
+    if not assignment:
+        conn.close()
+        return jsonify({'success': False, 'message': '分配不存在'}), 404
     conn.execute(
         'UPDATE assignments SET start_date=?, end_date=? WHERE id=?',
         (data['startDate'], data['endDate'], aid)
@@ -633,16 +641,20 @@ def update_assignment(aid):
     conn.commit()
     conn.close()
     broadcast('assignments_changed', {'action': 'update', 'id': aid})
-    return jsonify({'success': True})
+    return jsonify({'success': True, 'sync': sync_assignment_project(assignment['project_id'], 'assignment_update')})
 
 @app.route('/api/assignments/<aid>', methods=['DELETE'])
 def delete_assignment(aid):
     conn = get_db()
+    assignment = conn.execute('SELECT project_id FROM assignments WHERE id=?', (aid,)).fetchone()
+    if not assignment:
+        conn.close()
+        return jsonify({'success': False, 'message': '分配不存在'}), 404
     conn.execute('DELETE FROM assignments WHERE id=?', (aid,))
     conn.commit()
     conn.close()
     broadcast('assignments_changed', {'action': 'delete', 'id': aid})
-    return jsonify({'success': True})
+    return jsonify({'success': True, 'sync': sync_assignment_project(assignment['project_id'], 'assignment_delete')})
 
 # ==================== 配置 API ====================
 
@@ -1139,15 +1151,18 @@ def export_data():
         projects = conn.execute('SELECT * FROM projects ORDER BY start_date').fetchall()
         persons = conn.execute('SELECT * FROM persons ORDER BY group_type, name').fetchall()
         assignments = conn.execute('SELECT * FROM assignments ORDER BY start_date').fetchall()
-        config = conn.execute('SELECT * FROM config').fetchall()
+        config = conn.execute('SELECT key, value FROM config').fetchall()
         conn.close()
+        sensitive = ('password', 'secret', 'token', 'api_key', 'apikey', 'access_key', 'private_key', 'cookie')
+        safe_config = {c['key']: c['value'] for c in config
+                       if not any(part in str(c['key']).lower() for part in sensitive)}
         
         data = {
             'export_time': time.strftime('%Y-%m-%d %H:%M:%S'),
             'projects': [dict(p) for p in projects],
             'persons': [dict(p) for p in persons],
             'assignments': [dict(a) for a in assignments],
-            'config': {c['key']: c['value'] for c in config}
+            'config': safe_config
         }
         
         return jsonify({"success": True, "data": data})
@@ -1342,7 +1357,7 @@ def get_leave_schedule():
         last_sync_time = int(config.get('leave_sync_last_time', 0))
         return jsonify({
             "intervalHours": interval_hours,
-            "enabled": config.get('leave_sync_enabled', '1') == '1',
+            "enabled": config.get('leave_sync_enabled', '0') == '1',
             "lastSyncTime": last_sync_time,
             "nextSyncTime": last_sync_time + interval_hours * 3600 * 1000 if last_sync_time else 0
         })
@@ -1403,7 +1418,7 @@ def sync_dingtalk_leave_internal(app_key, app_secret):
 
 # 全局定时任务配置
 leave_sync_interval = 4  # 小时
-leave_sync_enabled = True
+leave_sync_enabled = False
 
 def schedule_leave_sync():
     """定时同步请假状态"""
@@ -1573,6 +1588,39 @@ def _project_sync_interval_seconds():
 
 PROJECT_SYNC_INTERVAL_SECONDS = _project_sync_interval_seconds()
 project_sync_coordinator = ProjectSyncCoordinator()
+
+def sync_assignment_project(project_id, trigger):
+    """Run post-write sync without turning an external failure into a local rollback."""
+    def run_one():
+        conn = get_db()
+        try:
+            result = sync_project(conn, str(project_id), trigger, 'assignment')
+            conn.commit()
+            return result
+        except Exception as exc:
+            conn.commit()
+            return {'success': False, 'error': redact_error(exc), 'retryable': True}
+        finally:
+            conn.close()
+    return project_sync_coordinator.run(str(project_id), run_one)
+
+def sync_deleted_project(project_id):
+    """Process a deleted project's managed members while retaining a retryable local record."""
+    conn = get_db()
+    try:
+        binding = conn.execute('SELECT * FROM project_easyai_binding WHERE project_id=?', (str(project_id),)).fetchone()
+        result = sync_all_projects(conn, 'project-delete', project_sync_coordinator)
+        delete_result = None
+        if result.get('success') and binding and binding['easyai_org_id'] and SYNC_ENABLED:
+            delete_result = EasyAIClient(load_easyai_runtime_config(conn)).delete_organization(binding['easyai_org_id'], binding['parent_org_id'], project_id)
+            conn.execute("UPDATE project_easyai_binding SET status='deleted', last_error='', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
+        conn.commit()
+        return {'success': result.get('success', False) and (not SYNC_ENABLED or delete_result is not None or not binding or not binding['easyai_org_id']), 'projectId': str(project_id), 'delete': delete_result, 'retryable': not result.get('success', False)}
+    except Exception as exc:
+        conn.commit()
+        return {'success': False, 'projectId': str(project_id), 'error': redact_error(exc), 'retryable': True}
+    finally:
+        conn.close()
 
 def start_leave_sync_scheduler():
     """启动一次请假定时同步线程。"""

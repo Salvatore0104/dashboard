@@ -155,7 +155,7 @@
     if (!confirmed) return;
     const result = await fetchJson("api/project-sync/identities/bind-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) }).catch((error) => ({ success: false, message: error.message }));
     if (!result.success) return toast(result.message || "批量绑定失败");
-    toast(`批量绑定完成：新增绑定 ${result.bound}，冲突 ${result.conflict}，未匹配 ${result.unmatched}`);
+    toast(`批量绑定完成：新增绑定 ${result.newBound ?? result.bound}，已有绑定 ${result.existingBound ?? 0}，冲突 ${result.conflict}，未匹配 ${result.unmatched}`);
     await loadIdentities();
   }
 
@@ -497,10 +497,14 @@
       color: state.selectedColor
     };
     const url = state.editingProjectId ? `api/projects/${encodeURIComponent(state.editingProjectId)}` : "api/projects";
-    await fetch(url, { method: state.editingProjectId ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    try {
+      const result = await fetchJson(url, { method: state.editingProjectId ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!result.success) throw new Error(result.message || result.syncError || "项目保存失败");
+      if (result.syncError) toast(`项目已保存，但组织同步待重试：${result.syncError}`);
+      else toast("项目已保存");
+    } catch (error) { return toast(error.message || "项目保存失败"); }
     closeModal("projectModal");
     await loadAll();
-    toast("项目已保存");
   }
 
   function openBusinessTripModal(id) {
@@ -517,14 +521,15 @@
   }
 
   function currentTripProject() {
-    return state.projects.find((p) => String(p.id) === String(state.businessTripProjectId || els.btProjectId?.value));
+    const selectedId = state.businessTripProjectId || els.btProjectId?.value;
+    return state.projects.find((p) => String(p.id ?? p.project_id) === String(selectedId));
   }
 
   function renderBusinessTripPersonPicker(project) {
     const enabled = els.projectBusinessTrip.checked;
     els.businessTripPersons.style.display = enabled ? "grid" : "none";
     if (!enabled) return;
-    const selected = new Set(parseJsonArray(project?.business_trip_persons).map(String));
+    const selected = new Set(parseJsonArray(project?.business_trip_persons ?? project?.businessTripPersons).map(String));
     els.businessTripPersons.innerHTML = state.persons.map((p) => `<label class="person-check"><input type="checkbox" value="${esc(p.id)}" ${selected.has(String(p.id)) ? "checked" : ""}><span class="person-dot" style="background:${personColor(p)}">${esc(String(p.name || "?").slice(0, 1))}</span><span>${esc(p.name)}</span></label>`).join("") || `<span class="tag">暂无人员</span>`;
   }
 
@@ -537,7 +542,10 @@
       businessTripEnd: els.projectBusinessTripEnd.value,
       businessTripPersons: [...els.businessTripPersons.querySelectorAll("input:checked")].map((input) => input.value)
     };
-    await fetch(`api/projects/${encodeURIComponent(project.id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    try {
+      const result = await fetchJson(`api/projects/${encodeURIComponent(project.id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!result.success) throw new Error(result.message || "出差信息保存失败");
+    } catch (error) { return toast(error.message || "出差信息保存失败"); }
     closeModal("businessTripModal");
     await loadAll();
     toast("出差信息已保存");
@@ -545,14 +553,20 @@
 
   async function deleteProject(id) {
     if (!confirm("确定删除此项目及其全部分配吗？")) return;
-    await fetch(`api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
+    try {
+      const result = await fetchJson(`api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (!result.success) throw new Error(result.message || "项目删除失败");
+    } catch (error) { return toast(error.message || "项目删除失败"); }
     await loadAll();
     toast("项目已删除");
   }
 
   async function deletePerson(id) {
     if (!confirm("确定删除此人员及其全部分配吗？")) return;
-    await fetch(`api/persons/${encodeURIComponent(id)}`, { method: "DELETE" });
+    try {
+      const result = await fetchJson(`api/persons/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (!result.success) throw new Error(result.message || "人员删除失败");
+    } catch (error) { return toast(error.message || "人员删除失败"); }
     await loadAll();
     toast("人员已删除");
   }
@@ -569,14 +583,20 @@
   }
 
   async function saveLeave() {
-    await fetch("api/leave/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ personId: state.editingLeavePersonId, leaveStatus: els.leaveType.value, leaveType: els.leaveType.value, leaveStart: els.leaveStart.value, leaveEnd: els.leaveEnd.value }) });
+    try {
+      const result = await fetchJson("api/leave/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ personId: state.editingLeavePersonId, leaveStatus: els.leaveType.value, leaveType: els.leaveType.value, leaveStart: els.leaveStart.value, leaveEnd: els.leaveEnd.value }) });
+      if (!result.success) throw new Error(result.message || "请假记录保存失败");
+    } catch (error) { return toast(error.message || "请假记录保存失败"); }
     closeModal("leaveModal");
     await loadAll();
     toast("请假记录已保存");
   }
 
   async function clearLeave() {
-    await fetch("api/leave/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ personId: state.editingLeavePersonId, leaveStatus: "", leaveType: "", leaveStart: "", leaveEnd: "" }) });
+    try {
+      const result = await fetchJson("api/leave/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ personId: state.editingLeavePersonId, leaveStatus: "", leaveType: "", leaveStart: "", leaveEnd: "" }) });
+      if (!result.success) throw new Error(result.message || "请假状态清空失败");
+    } catch (error) { return toast(error.message || "请假状态清空失败"); }
     closeModal("leaveModal");
     await loadAll();
     toast("请假状态已清空");
@@ -1041,8 +1061,12 @@
   }
   function fetchJson(url, options) {
     return fetch(url, options).then((response) => {
-      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-      return response.json();
+      return response.text().then((text) => {
+        let body = {};
+        try { body = text ? JSON.parse(text) : {}; } catch (_) { body = {}; }
+        if (!response.ok) throw new Error(body.message || `${response.status} ${response.statusText}`);
+        return body;
+      });
     });
   }
   function todayStr(add = 0) {

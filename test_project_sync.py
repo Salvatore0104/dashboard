@@ -8,7 +8,7 @@ from pathlib import Path
 os.environ.setdefault("EASYAI_SYNC_MODE", "mock")
 os.environ.setdefault("EASYAI_SYNC_ENABLED", "true")
 
-from project_sync import EasyAIClient, ProjectSyncCoordinator, encrypt_secret, ensure_tables, ensure_binding, identity_inventory_preview, iter_organizations, load_easyai_runtime_config, match_identities, normalize_name, organization_id, persist_identity_matches, preview_all_projects, preview_project, refresh_identity_inventory, redact_error, sync_all_projects, sync_project, test_org_name
+from project_sync import EasyAIClient, ProjectSyncCoordinator, _batch_result, encrypt_secret, ensure_tables, ensure_binding, identity_inventory_preview, iter_organizations, load_easyai_runtime_config, match_identities, normalize_name, organization_id, persist_identity_matches, preview_all_projects, preview_project, project_members, refresh_identity_inventory, redact_error, sync_all_projects, sync_project, test_org_name
 
 
 class ProjectSyncUnitTests(unittest.TestCase):
@@ -31,13 +31,33 @@ class ProjectSyncUnitTests(unittest.TestCase):
 
     def test_test_org_name_is_idempotent(self):
         first = test_org_name("演示项目")
-        self.assertTrue(first.startswith("[TEST][dashboard-local]"))
+        self.assertEqual(first, "演示项目")
         self.assertEqual(test_org_name(first), first)
+
+    def test_expired_assignments_are_not_project_members(self):
+        self.conn.execute("INSERT INTO projects (id, name, start_date, end_date) VALUES ('project-1', '演示', '2026-01-01', '2026-12-31')")
+        self.conn.execute("INSERT INTO persons (id, name) VALUES ('person-1', '张三')")
+        self.conn.execute("INSERT INTO assignments (id, person_id, project_id, start_date, end_date) VALUES ('assignment-1', 'person-1', 'project-1', '2020-01-01', '2020-01-02')")
+        self.assertEqual(project_members(self.conn, 'project-1'), [])
 
     def test_redact_error_removes_secret_values(self):
         message = redact_error("api_key=sk-1234567890abcdef token=abc")
         self.assertNotIn("1234567890abcdef", message)
         self.assertIn("[REDACTED]", message)
+
+    def test_batch_result_preserves_partial_success(self):
+        result = _batch_result({'success_ids': ['u1'], 'failed_ids': ['u2']}, ['u1', 'u2'], 'remove')
+        self.assertEqual(result['success_ids'], ['u1'])
+        self.assertEqual(result['failed_ids'], ['u2'])
+        self.assertTrue(result['partial'])
+
+    def test_delete_guard_requires_dashboard_parent_and_description(self):
+        client = EasyAIClient()
+        client._mock_orgs['org-1'] = {'_id': 'org-1', 'name': '项目', 'parent': 'parent-1', 'description': 'dashboard project p1'}
+        self.assertTrue(client.delete_organization('org-1', 'parent-1', 'p1')['deleted'])
+        client._mock_orgs['org-2'] = {'_id': 'org-2', 'name': '外部', 'parent': 'parent-1', 'description': 'other'}
+        with self.assertRaisesRegex(RuntimeError, '不匹配'):
+            client.delete_organization('org-2', 'parent-1', 'p2')
 
     def test_matching_uses_dingtalk_ids_and_does_not_fallback_to_name(self):
         members = [
@@ -240,6 +260,11 @@ class ProjectSyncUnitTests(unittest.TestCase):
         app_source = Path(__file__).with_name("app.py").read_text(encoding="utf-8")
         self.assertNotIn("result['easyai_admin_password_masked']", app_source)
         self.assertIn("JWT 已过期或无效", app_source)
+
+    def test_export_filters_sensitive_config_keys(self):
+        app_source = Path(__file__).with_name("app.py").read_text(encoding="utf-8")
+        self.assertIn("sensitive = ('password', 'secret', 'token', 'api_key'", app_source)
+        self.assertIn("if not any(part in str(c['key']).lower() for part in sensitive)", app_source)
 
 
 if __name__ == "__main__":

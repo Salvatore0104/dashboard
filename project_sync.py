@@ -128,8 +128,7 @@ def normalize_name(value):
 
 def test_org_name(name):
     raw = str(name or "未命名项目").strip()
-    prefix = TEST_PREFIX or "[TEST][dashboard-local]"
-    return raw if raw.startswith(prefix) else f"{prefix} {raw}"
+    return raw
 
 
 def redact_error(error):
@@ -241,7 +240,7 @@ class EasyAIClient:
             key = str(external_id)
             if key in self._mock_orgs:
                 return self._mock_orgs[key]
-            org = {"_id": f"mock-org-{hashlib.sha1(key.encode()).hexdigest()[:12]}", "name": name, "parent": parent_id, "external_id": key}
+            org = {"_id": f"mock-org-{hashlib.sha1(key.encode()).hexdigest()[:12]}", "name": name, "parent": parent_id, "external_id": key, "description": f"dashboard project {external_id}"}
             self._mock_orgs[key] = org
             return org
         # The deployed OpenAPI DTO uses `parent` and returns Mongo-style `_id`.
@@ -276,7 +275,7 @@ class EasyAIClient:
                     org["name"] = name
                     return org
             raise RuntimeError(f"未找到组织：{org_id}")
-        data = self._request("PUT", f"/organization/{org_id}", json={"name": name})
+        data = self._request("PATCH", f"/organization/{org_id}", json={"name": name})
         return data.get("data", data) if isinstance(data, dict) else data
 
     def list_users(self):
@@ -294,6 +293,34 @@ class EasyAIClient:
         # The set endpoint replaces a user's organization membership.  Use the
         # additive OpenAPI endpoint so existing organization access is retained.
         path = f"/v1/openapi/organization/{org_id}/users/batch/add"
+        data = self._request("POST", path, json={"user_ids": user_ids})
+        return data.get("data", data) if isinstance(data, dict) else data
+
+    def delete_organization(self, org_id, parent_id, external_id):
+        """Delete only an organization proven to be a Dashboard-owned binding."""
+        org = next((item for item in iter_organizations(self.list_organizations()) if organization_id(item) == str(org_id)), None)
+        if not org:
+            raise RuntimeError("待删除组织不存在")
+        actual_parent = str(org.get("parent") or org.get("parent_id") or org.get("parentId") or "")
+        description = str(org.get("description") or "")
+        if actual_parent != str(parent_id) or description != f"dashboard project {external_id}":
+            raise RuntimeError("组织归属或 Dashboard 标记不匹配，拒绝删除")
+        if self.mode == "mock":
+            for key, value in list(self._mock_orgs.items()):
+                if organization_id(value) == str(org_id):
+                    del self._mock_orgs[key]
+                    return {"deleted": True, "id": str(org_id)}
+            raise RuntimeError("待删除组织不存在")
+        data = self._request("DELETE", f"/organization/{org_id}")
+        return data.get("data", data) if isinstance(data, dict) else data
+
+    def remove_users_from_organization(self, user_ids, org_id):
+        user_ids = [str(item) for item in user_ids]
+        if not user_ids:
+            return {"removed": 0, "user_ids": []}
+        if self.mode == "mock":
+            return {"removed": len(user_ids), "user_ids": user_ids, "org_id": org_id}
+        path = f"/v1/openapi/organization/{org_id}/users/batch/remove"
         data = self._request("POST", path, json={"user_ids": user_ids})
         return data.get("data", data) if isinstance(data, dict) else data
 
@@ -317,6 +344,29 @@ class EasyAIClient:
             payload["union_id"] = str(dingtalk_union_id)
         data = self._request("POST", path, json=payload)
         return data.get("data", data) if isinstance(data, dict) else data
+
+
+def _batch_result(result, requested_ids, operation):
+    """Normalize provider batch responses without claiming partial work succeeded."""
+    requested = [str(item) for item in requested_ids]
+    body = result if isinstance(result, dict) else {}
+    candidates = body.get("user_ids") or body.get("userIds") or body.get("succeeded_ids") or body.get("success_ids")
+    failed = body.get("failed_ids") or body.get("failed_user_ids") or body.get("errors")
+    if isinstance(candidates, dict):
+        candidates = list(candidates)
+    success_ids = [str(item) for item in candidates] if isinstance(candidates, list) else None
+    failed_ids = [str(item) for item in failed] if isinstance(failed, list) else []
+    if success_ids is None:
+        count_key = "added" if operation == "add" else "removed"
+        count = body.get(count_key)
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            count = None
+        success_ids = requested if count is None and not failed_ids else requested[:max(0, min(len(requested), count or 0))]
+    success_ids = [item for item in success_ids if item in requested and item not in failed_ids]
+    return {"requested_ids": requested, "success_ids": success_ids, "failed_ids": failed_ids,
+            operation: len(success_ids), "partial": len(success_ids) < len(requested), "raw": result}
 
 
 def ensure_tables(conn):
@@ -403,14 +453,13 @@ def project_members(conn, project_id):
     rows = conn.execute("""
         SELECT DISTINCT p.id, p.name, p.ding_id, COALESCE(p.dingtalk_union_id, '') AS dingtalk_union_id
         FROM assignments a JOIN persons p ON p.id=a.person_id
-        WHERE a.project_id=? AND a.start_date<=? AND a.end_date>=?
+        WHERE a.project_id=?
+          AND (a.start_date='' OR a.start_date<=?)
+          AND (a.end_date='' OR a.end_date>=?)
     """, (project_id, today, today)).fetchall()
-    if rows:
-        return rows
-    return conn.execute("""
-        SELECT DISTINCT p.id, p.name, p.ding_id, COALESCE(p.dingtalk_union_id, '') AS dingtalk_union_id
-        FROM assignments a JOIN persons p ON p.id=a.person_id WHERE a.project_id=?
-    """, (project_id,)).fetchall()
+    # An empty active set is meaningful: expired assignments must leave the
+    # project organization instead of being re-added by a fallback query.
+    return rows
 
 
 def _user_id(user):
@@ -638,11 +687,14 @@ def preview_project(conn, project_id):
         str(row["easyai_user_id"])
         for row in conn.execute("SELECT easyai_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (project_id,)).fetchall()
     }
+    active_dashboard_ids = {str(member["id"]) for member in members}
+    tracked_rows = conn.execute("SELECT easyai_user_id, dashboard_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (project_id,)).fetchall()
+    removable = [str(row["easyai_user_id"]) for row in tracked_rows if row["dashboard_user_id"] and str(row["dashboard_user_id"]) not in active_dashboard_ids]
     for item in matches:
         item["membership"] = "existing" if item.get("easyai_user_id") in known else "new"
     existing = sum(item["status"] in {"auto_matched", "confirmed"} and item["membership"] == "existing" for item in matches)
     added = sum(item["status"] in {"auto_matched", "confirmed"} and item["membership"] == "new" for item in matches)
-    return {"project": dict(project), "binding": dict(binding) if binding else None, "members": matches, "added": added, "existing": existing, "unmatched": counts["unmatched"], "conflict": counts["conflict"], "removed": 0, "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
+    return {"project": dict(project), "binding": dict(binding) if binding else None, "members": matches, "added": added, "existing": existing, "unmatched": counts["unmatched"], "conflict": counts["conflict"], "removed": len(removable), "removed_ids": removable, "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
 
 
 def sync_project(conn, project_id, trigger="manual", operator_id=""):
@@ -650,7 +702,8 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
     if not project:
         raise ValueError("项目不存在")
     run_id = str(uuid.uuid4())
-    idem = f"project-sync:{project_id}:{time.strftime('%Y%m%d%H%M')}"
+    member_fingerprint = json.dumps([dict(row) for row in project_members(conn, project_id)], ensure_ascii=False, sort_keys=True)
+    idem = f"project-sync:{project_id}:{hashlib.sha256(member_fingerprint.encode('utf-8')).hexdigest()[:24]}"
     started = now_ms()
     prior = conn.execute("SELECT * FROM sync_run WHERE idempotency_key=?", (idem,)).fetchone()
     if prior:
@@ -670,9 +723,16 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
             users = [{"id": f"mock-user-{member['id']}", "name": member["name"], "dingtalk_user_id": member["ding_id"], "dingtalk_union_id": member["dingtalk_union_id"]} for member in members if member["ding_id"] or member["dingtalk_union_id"]]
         matches = match_identities(conn, members, users)
         persisted = persist_identity_matches(conn, matches, operator_id)
-        tracked = {str(row["easyai_user_id"]) for row in conn.execute("SELECT easyai_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (project_id,)).fetchall()}
+        tracked_rows = conn.execute("SELECT easyai_user_id, dashboard_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (project_id,)).fetchall()
+        tracked = {str(row["easyai_user_id"]) for row in tracked_rows}
         matched_ids = [item["easyai_user_id"] for item in persisted if item["easyai_user_id"]]
         new_ids = [user_id for user_id in matched_ids if str(user_id) not in tracked]
+        active_ids = {str(user_id) for user_id in matched_ids}
+        active_dashboard_ids = {str(member["id"]) for member in members}
+        # Only remove members that this project explicitly managed and whose
+        # dashboard assignment is no longer active. Conflicts stay in place.
+        stale_ids = sorted(str(row["easyai_user_id"]) for row in tracked_rows
+                           if row["dashboard_user_id"] and str(row["dashboard_user_id"]) not in active_dashboard_ids)
         existing_count = len(matched_ids) - len(new_ids)
         identity_results = []
         for item in persisted:
@@ -680,20 +740,33 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
                 identity_results.append(client.bind_dingtalk_identity(item["easyai_user_id"], item.get("dingtalk_user_id", ""), item.get("dingtalk_union_id", "")))
             else:
                 identity_results.append({"user_id": item["easyai_user_id"], "status": "local_identity_only"})
-        added = client.add_users_to_organization(new_ids, binding["easyai_org_id"]) if SYNC_ENABLED else {"added": len(new_ids)}
+        removal_raw = client.remove_users_from_organization(stale_ids, binding["easyai_org_id"]) if SYNC_ENABLED else {"removed": len(stale_ids)}
+        removal_result = _batch_result(removal_raw, stale_ids, "remove")
+        added_raw = client.add_users_to_organization(new_ids, binding["easyai_org_id"]) if SYNC_ENABLED else {"added": len(new_ids)}
+        added_result = _batch_result(added_raw, new_ids, "add")
+        removed_ids = removal_result["success_ids"]
+        added_ids = added_result["success_ids"]
         synced_at = now_ms()
         for item in persisted:
-            if item["easyai_user_id"]:
+            if item["easyai_user_id"] and (str(item["easyai_user_id"]) not in new_ids or str(item["easyai_user_id"]) in added_ids):
                 conn.execute("""INSERT INTO project_easyai_member (project_id, easyai_org_id, easyai_user_id, dashboard_user_id, status, first_synced_at, last_synced_at) VALUES (?, ?, ?, ?, 'active', ?, ?) ON CONFLICT(project_id, easyai_user_id) DO UPDATE SET dashboard_user_id=excluded.dashboard_user_id, status='active', last_synced_at=excluded.last_synced_at""", (project_id, binding["easyai_org_id"], item["easyai_user_id"], item["dashboard_user_id"], synced_at, synced_at))
+        for stale_id in removed_ids:
+            conn.execute("UPDATE project_easyai_member SET status='removed', last_synced_at=? WHERE project_id=? AND easyai_user_id=?", (synced_at, project_id, stale_id))
         unmatched = sum(item["status"] == "unmatched" for item in matches)
         conflicts = sum(item["status"] == "conflict" for item in matches)
-        details = {"members": matches, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "identity_bindings": identity_results, "provider_result": added, "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
+        details = {"members": matches, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "identity_bindings": identity_results, "provider_result": added_result, "removal_result": removal_result, "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
         details["existing"] = existing_count
-        details["new_ids"] = new_ids
-        conn.execute("UPDATE sync_run SET status='succeeded', finished_at=?, added_count=?, existing_count=?, unmatched_count=?, conflict_count=?, details=? WHERE id=?", (now_ms(), len(new_ids), existing_count, unmatched, conflicts, json.dumps(details, ensure_ascii=False), run_id))
+        details["new_ids"] = added_ids
+        details["removed_ids"] = removed_ids
+        partial_error = bool(added_result["partial"] or removal_result["partial"])
+        if partial_error:
+            details["partial_failure"] = True
+        conn.execute("UPDATE sync_run SET status=?, finished_at=?, added_count=?, existing_count=?, removed_count=?, unmatched_count=?, conflict_count=?, error_count=?, details=? WHERE id=?", ('failed' if partial_error else 'succeeded', now_ms(), len(added_ids), existing_count, len(removed_ids), unmatched, conflicts, 1 if partial_error else 0, json.dumps(details, ensure_ascii=False), run_id))
         conn.execute("UPDATE project_easyai_binding SET last_sync_at=?, last_error='', updated_at=datetime('now') WHERE project_id=?", (now_ms(), project_id))
-        conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, affected_user_ids, result, created_at) VALUES (?, ?, ?, 'project_sync', ?, ?, 'succeeded', ?)", (str(uuid.uuid4()), operator_id, project_id, binding["easyai_org_id"], json.dumps(matched_ids), now_ms()))
-        return {"success": True, "run_id": run_id, "added": len(new_ids), "existing": existing_count, "unmatched": unmatched, "conflict": conflicts, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "details": details}
+        conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, affected_user_ids, result, created_at) VALUES (?, ?, ?, 'project_sync', ?, ?, ?, ?)", (str(uuid.uuid4()), operator_id, project_id, binding["easyai_org_id"], json.dumps(matched_ids + removed_ids), 'failed' if partial_error else 'succeeded', now_ms()))
+        if partial_error:
+            return {"success": False, "run_id": run_id, "added": len(added_ids), "existing": existing_count, "removed": len(removed_ids), "unmatched": unmatched, "conflict": conflicts, "error": "批量组织成员操作部分失败，可重试失败成员", "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "details": details}
+        return {"success": True, "run_id": run_id, "added": len(added_ids), "existing": existing_count, "removed": len(removed_ids), "unmatched": unmatched, "conflict": conflicts, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "details": details}
     except Exception as exc:
         message = redact_error(exc)
         conn.execute("UPDATE sync_run SET status='failed', finished_at=?, error_count=1, details=? WHERE id=?", (now_ms(), json.dumps({"error": message}, ensure_ascii=False), run_id))
@@ -722,16 +795,22 @@ def preview_all_projects(conn):
     return {"projects": rows, "totals": totals, "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real"}
 
 
-def sync_all_projects(conn, operator_id="local-admin"):
+def sync_all_projects(conn, operator_id="local-admin", coordinator=None):
     """Synchronize all live projects and mark deleted-project bindings safely."""
     preview = preview_all_projects(conn)
     results = []
+    client = EasyAIClient(load_easyai_runtime_config(conn)) if SYNC_ENABLED else None
     project_ids = {str(item["project"]["id"]) for item in preview["projects"]}
     orphaned = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id NOT IN ({})".format(",".join("?" for _ in project_ids) if project_ids else "NULL"), tuple(project_ids)).fetchall()
     for binding in orphaned:
+        member_rows = conn.execute("SELECT easyai_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (binding["project_id"],)).fetchall()
+        member_ids = [str(row["easyai_user_id"]) for row in member_rows]
+        removal_raw = client.remove_users_from_organization(member_ids, binding["easyai_org_id"]) if client and binding["easyai_org_id"] else {"removed": len(member_ids)}
+        removal_result = _batch_result(removal_raw, member_ids, "remove")
+        conn.executemany("UPDATE project_easyai_member SET status='removed', last_synced_at=? WHERE project_id=? AND easyai_user_id=?", [(now_ms(), binding["project_id"], user_id) for user_id in removal_result["success_ids"]])
         conn.execute("UPDATE project_easyai_binding SET status='pending_delete', last_error='项目已删除，线上组织待人工确认清理', updated_at=datetime('now') WHERE project_id=?", (binding["project_id"],))
         conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, result, error_code, created_at) VALUES (?, ?, ?, 'global_sync_pending_delete', ?, 'pending_delete', 'PROJECT_DELETED', ?)", (str(uuid.uuid4()), operator_id, binding["project_id"], binding["easyai_org_id"] or "", now_ms()))
-        results.append({"project_id": binding["project_id"], "project_name": binding["organization_name"], "status": "pending_delete", "added": 0, "existing": 0, "unmatched": 0, "conflict": 0, "removed": 0})
+        results.append({"project_id": binding["project_id"], "project_name": binding["organization_name"], "status": "pending_delete", "added": 0, "existing": 0, "unmatched": 0, "conflict": 0, "removed": len(removal_result["success_ids"]), "removal_result": removal_result})
     for item in preview["projects"]:
         project = item["project"]
         project_id = str(project["id"])
@@ -743,8 +822,8 @@ def sync_all_projects(conn, operator_id="local-admin"):
             continue
         try:
             update_project_binding_name(conn, project_id, project["name"])
-            result = sync_project(conn, project_id, "global", operator_id)
-            results.append({"project_id": project_id, "project_name": project["name"], "status": "succeeded", "added": result.get("added", 0), "existing": result.get("existing", 0), "unmatched": result.get("unmatched", 0), "conflict": result.get("conflict", 0), "removed": result.get("removed", 0), "run_id": result.get("run_id")})
+            result = (coordinator or ProjectSyncCoordinator()).run(project_id, lambda: sync_project(conn, project_id, "global", operator_id))
+            results.append({"project_id": project_id, "project_name": project["name"], "status": "succeeded" if result.get("success") else "failed", "added": result.get("added", 0), "existing": result.get("existing", 0), "unmatched": result.get("unmatched", 0), "conflict": result.get("conflict", 0), "removed": result.get("removed", 0), "run_id": result.get("run_id"), "error": result.get("error", "")})
         except Exception as exc:
             results.append({"project_id": project_id, "project_name": project.get("name", ""), "status": "failed", "error": redact_error(exc), "added": 0, "existing": 0, "unmatched": 0, "conflict": 0, "removed": 0})
     totals = {key: sum(int(item.get(key, 0) or 0) for item in results) for key in ("added", "existing", "unmatched", "conflict", "removed")}

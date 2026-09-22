@@ -38,6 +38,7 @@ html,
 body {
   margin: 0;
   min-height: 100%;
+  overflow-x: hidden;
 }
 
 body {
@@ -149,6 +150,7 @@ a {
 
 .main {
   width: min(1800px, 100%);
+  min-width: 0;
   margin: 0 auto;
   padding: 18px 24px 28px;
 }
@@ -509,6 +511,9 @@ a {
   border: 1px solid var(--line);
   border-radius: 10px;
   box-shadow: var(--shadow);
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .gantt {
