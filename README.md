@@ -1,264 +1,128 @@
 # Claw Dashboard
 
-项目排期甘特图看板
+项目排期、人员分配、请假与出差展示，以及 EasyAI 项目组织同步。
 
-## 最近更新
+## 当前发布
 
-- 修复请假信息悬浮提示，显示完整日期范围
-- 移除重复图标，优化界面显示
-- 简化删除模式操作
-- 移除多选拖拽功能，保留单条拖拽调整
+2026-09-22：权限升级与归档同步调整已上线，用户确认验收通过。生产运行代码为 `0110182`；后续文档提交不改变生产代码。完整隔离测试 68 项通过。
 
-## 功能
+- [正式入口](https://wowidea.top/kaoqin/)
+- [主站嵌入页面](https://wowidea.top/custom/kaoqin)
+- [匿名 TV 看板](https://wowidea.top/kaoqin/tv.html)
+- [发布、验证与回滚记录](docs/access-production-release-20260922.md)
 
-- 甘特图可视化项目进度
-- 拖拽分配人员到项目
-- 拖拽时高亮显示（黄色=已有条，红色=无该项目）
-- 请假/出差状态显示
-- 电视看板大屏展示
-- SQLite本地数据库 + SSE实时更新
+## 页面与权限
 
-## 项目结构
+| 页面 | 路径 | 访问范围 |
+| --- | --- | --- |
+| 导航首页 | `/` | 公开入口 |
+| TV 看板 | `/tv.html` | 匿名及所有用户可看 |
+| 前台编辑看板 | `/dashboard.html` | 角色数组包含 `operator`、`manager` 或 `admin` |
+| 后台管理 | `/admin.html` | 同上 |
 
-```
-claw-dashboard/
-├── app.py                 # Flask 后端主程序
-│   ├── /api/projects      # 项目管理 API
-│   ├── /api/persons       # 人员管理 API
-│   ├── /api/assignments   # 分配管理 API
-│   ├── /api/config        # 配置管理 API
-│   ├── /api/events        # SSE 实时事件推送
-│   └── /api/dingtalk      # 钉钉集成 API
-│
-├── static/                # 静态资源目录
-│   ├── index.html         # 首页（导航页面）
-│   ├── dashboard.html     # 甘特图看板主页面
-│   ├── admin.html         # 后台管理页面
-│   └── tv.html            # 电视大屏展示页面
-│
-├── requirements.txt       # Python 依赖列表
-├── README.md              # 项目说明文档
-├── .gitignore             # Git 忽略规则
-├── claw.db                # SQLite 数据库文件（运行时生成）
-│
-└── deploy.sh              # 一键部署脚本（服务器用）
-```
+普通用户仍能看到入口，进入受限页面后显示无权限并可返回 TV。看板复用主站当前访问令牌；登录、退出和令牌续期由主站负责，看板不提供独立登录或续期流程。
 
-## 快速开始
+后端逐请求调用平台身份接口验证访问者，不信任客户端角色，不使用系统同步凭据代替访问者。缺失或失效身份返回 401，角色不足返回 403，上游验证异常返回 503 并拒绝操作。静态空壳公开，业务数据和操作由后端保护，CSV/JSON 导出也需认证。
 
-### 本地开发
+TV 保留原布局、项目、人员、请假类型与日期，使用展示字段白名单，过滤隐藏人员及关联排期。SSE 仅发送失效通知，主题缓存只保存展示字段。详情见[权限方案](docs/access-control-plan.md)。
 
-```bash
-# 克隆项目
-git clone https://github.com/Salvatore0104/dashboard.git
-cd dashboard
+## 功能与组织同步
 
-# 安装依赖
-pip install flask flask-cors python-dotenv requests
+- 甘特图排期、拖拽分配与调整、人员分组、请假及出差提示。
+- TV 只读展示、实时更新、JSON/CSV 导出。
+- 钉钉人员及请假同步，既有 EasyAI 用户身份匹配、人工确认和审计。
+- 项目组织单次同步、全局预览/同步、日志和可配置小时调度。
+- 管理凭据加密保存；访问者身份与同步管理身份分离。
 
-# 启动服务
-python app.py
-```
+项目结束日期早于服务器当天时归档；当天、未来或无结束日期的项目继续参与同步。生产时区为 `Asia/Shanghai`。
 
-访问 http://localhost:5000
+- 归档项目退出手动、全局、定时同步和一致性核对，现有组织及成员原样保留，不因归档清空成员。
+- 归档项目仍可本地编辑；名称和日期描述修改不写入平台。延期至未归档范围后重新参与同步。
+- 未归档项目中离开或排期到期的托管成员仍按原规则处理。
+- 显式删除项目保留平台组织，仅清理该项目托管关系；归档不等于删除。
+- 组织名称使用项目名称，位于“执行项目组”下。满足唯一性、父组织和绑定约束时可复用同名组织。
+- 新组织一次性初始化 `balance: 5000`、`balance_deduction_strategy: organization_first`；复用或重复同步不重置余额及扣费策略。
+- 匹配既有用户，不创建平台账号，不修改登录资料、历史、个人余额或其他组织关系。
 
-### 页面说明
-
-| 页面 | 地址 | 说明 |
-|------|------|------|
-| 首页 | / | 导航入口 |
-| 看板 | /dashboard.html | 甘特图主页面，拖拽分配人员 |
-| 管理 | /admin.html | 管理项目、人员、请假配置 |
-| 电视 | /tv.html | 大屏展示模式 |
-
-## 服务器部署
-
-### Docker 部署（推荐）
-
-**前提条件**：服务器已安装 Docker。
-
-#### 初次部署
-
-```bash
-# 1. 克隆项目
-git clone https://github.com/Salvatore0104/dashboard.git /root/claw-dashboard
-cd /root/claw-dashboard
-
-# 2. 构建镜像
-docker build -t claw-dashboard:latest .
-
-# 3. 启动容器（挂载 /data/claw 持久化数据库）
-docker run -d \
-  --name claw-dashboard \
-  -p 5000:5000 \
-  -v /data/claw:/data/claw \
-  --restart=always \
-  claw-dashboard:latest
-```
-
-#### 更新部署
-
-```bash
-cd /root/claw-dashboard
-git pull
-docker build -t claw-dashboard:latest .
-docker stop claw-dashboard
-docker rm claw-dashboard
-docker run -d \
-  --name claw-dashboard \
-  -p 5000:5000 \
-  -v /data/claw:/data/claw \
-  --restart=always \
-  claw-dashboard:latest
-```
-
-也可以直接运行服务器上的 `deploy.sh` 一键更新：
-
-```bash
-cd /root/claw-dashboard && bash deploy.sh
-```
-
-#### Docker 常用命令
-
-```bash
-# 查看容器状态
-docker ps --filter name=claw-dashboard
-
-# 查看日志
-docker logs -f --tail=50 claw-dashboard
-
-# 停止容器
-docker stop claw-dashboard
-
-# 重启容器
-docker restart claw-dashboard
-```
-
-### 手动部署（不使用 Docker）
-
-1. 上传项目到服务器：
-```bash
-scp -r ./claw-dashboard root@your-server:/var/www/
-```
-
-2. 在服务器上安装依赖：
-```bash
-cd /var/www/claw-dashboard
-pip3 install --break-system-packages flask flask-cors python-dotenv requests
-```
-
-3. 创建 systemd 服务文件 `/etc/systemd/system/claw-dashboard.service`：
-```ini
-[Unit]
-Description=Claw Dashboard - Gantt Chart Visualization
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/var/www/claw-dashboard
-Environment="FLASK_ENV=production"
-ExecStart=/usr/bin/python3 /var/www/claw-dashboard/app.py
-Restart=always
-RestartSec=5
-
-StandardOutput=append:/var/log/claw-dashboard/access.log
-StandardError=append:/var/log/claw-dashboard/error.log
-
-[Install]
-WantedBy=multi-user.target
-```
-
-4. 启用并启动服务：
-```bash
-systemctl daemon-reload
-systemctl enable claw-dashboard
-systemctl start claw-dashboard
-```
-
-### 服务器常用命令
-
-```bash
-# 查看服务状态
-systemctl status claw-dashboard
-
-# 重启服务
-systemctl restart claw-dashboard
-
-# 停止服务
-systemctl stop claw-dashboard
-
-# 启动服务
-systemctl start claw-dashboard
-
-# 查看实时日志
-journalctl -u claw-dashboard --no-pager -f
-
-# 查看访问日志
-tail -f /var/log/claw-dashboard/access.log
-
-# 查看错误日志
-tail -f /var/log/claw-dashboard/error.log
-```
-
-## 配置
-
-### 环境变量
-
-可在 `.env` 文件中配置：
-
-```env
-PORT=5000
-DINGTALK_APP_KEY=your_app_key
-DINGTALK_APP_SECRET=your_app_secret
-```
-
-### 数据库
-
-数据库文件 `claw.db` 位于项目目录，包含：
-- 项目信息
-- 人员信息
-- 项目分配记录
-- 请假配置
-- 系统设置
-
-备份时请包含此文件。
-
-## API 接口
-
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| /api/projects | GET/POST | 项目列表/创建项目 |
-| /api/projects/:id | PUT/DELETE | 更新/删除项目 |
-| /api/persons | GET/POST | 人员列表/创建人员 |
-| /api/assignments | GET/POST | 分配列表/创建分配 |
-| /api/config | GET/PUT | 配置获取/更新 |
-| /api/events | GET | SSE 实时事件流 |
-
-## 本地项目组织同步
-
-项目组织同步默认使用安全的 `mock` 模式，不会写入 wowidea.top。复制 `.env.local.example` 为 `.env.local` 后启动：
+## 本地开发
 
 ```powershell
+git clone https://github.com/Salvatore0104/dashboard.git
+cd dashboard
 python -m venv .venv
-.\\.venv\\Scripts\\Activate.ps1
-pip install -r requirements.txt
-python app.py
+.venv/Scripts/python.exe -m pip install -r requirements.txt
+Copy-Item .env.local.example .env.local
+.venv/Scripts/python.exe app.py
 ```
 
-后台项目列表中的“同步组织”按钮会创建本地测试组织绑定、生成同步预览并记录同步日志。默认定时任务关闭；需要验证 10 分钟调度时设置 `SYNC_SCHEDULER_ENABLED=true`。
+访问 `http://localhost:5000`。默认 mock 组织同步不会绕过页面鉴权；localhost 不会自动获得主站同源登录存储。
 
-真实 API 联调必须先撤销曾在聊天或其他不安全位置暴露的旧 Key，再将新 Key 通过本地环境变量提供，并显式设置 `EASYAI_SYNC_MODE=real`。真实模式会调用线上管理 API，所有组织名称会带 `[TEST][dashboard-local]` 前缀。
+使用隔离数据库和模拟访问者测试管理页面：
 
-后台系统配置也支持填写 wowidea.top 管理 Key。Key 会在后端加密保存，页面只显示末四位脱敏摘要；建议生产环境设置 `EASYAI_CONFIG_ENCRYPTION_KEY`，本地未设置时会生成被 `.gitignore` 忽略的本地加密密钥文件。
+```powershell
+.venv/Scripts/python.exe -m unittest discover -q
+.venv/Scripts/python.exe tests/serve_access_acceptance.py
+```
 
-新增接口：
+验收服务仅监听 `127.0.0.1:5011`，使用临时数据、禁止真实上游请求，不启动生产调度。浏览器验收：
 
-- `GET /api/project-sync/:projectId/status`：项目组织绑定和最近运行记录
-- `POST /api/project-sync/:projectId/preview`：生成成员匹配预览
-- `POST /api/project-sync/:projectId/run`：执行一次同步
-- `GET /api/project-sync/runs`：查看同步运行记录
-- `GET /api/project-sync/identities`：查看身份匹配记录
-- `POST /api/project-sync/identities/:userId/confirm`：人工确认 EasyAI 用户关联
+```powershell
+npx --yes --package @playwright/cli playwright-cli -s=dashboard-access open http://127.0.0.1:5011/admin.html
+npx --yes --package @playwright/cli playwright-cli -s=dashboard-access run-code --filename tests/access-browser-checks.js
+```
 
-项目同步只按钉钉 `userid/unionid` 匹配既有 EasyAI 用户，不再按姓名兜底，也不会创建 EasyAI 账号。预览接口为只读；正式同步会先写入身份映射，再通过追加组织成员接口加入组织，不会替换用户已有组织关系。真实环境还必须显式设置 `EASYAI_DINGTALK_BIND_PATH`（例如部署提供的用户身份绑定接口路径，支持 `{user_id}` 占位符）；未设置时会拒绝写入，避免误调用会自动注册账号的钉钉同步接口。
+## 配置与持久化
+
+| 配置 | 说明 |
+| --- | --- |
+| `PORT` | 默认 5000 |
+| `DB_PATH` | 本地默认 `claw.db`，生产 `/data/claw/claw.db` |
+| `EASYAI_SYNC_MODE` | 默认 `mock`，`real` 使用真实平台管理接口 |
+| `EASYAI_SYNC_ENABLED` | 组织同步能力开关 |
+| `SYNC_SCHEDULER_ENABLED` | 默认关闭；后台保存的调度配置优先 |
+| `EASYAI_CONFIG_KEY_FILE` | 凭据加密密钥文件，生产随 `/data/claw` 持久化 |
+| `EASYAI_CONFIG_ENCRYPTION_KEY` | 可选显式加密密钥，不可提交 Git |
+| `DINGTALK_APP_KEY` / `DINGTALK_APP_SECRET` | 钉钉凭据，也可在后台配置 |
+| `EASYAI_DINGTALK_BIND_PATH` | 可选既有用户身份绑定接口；为空时仅保存本地映射，组织成员同步仍可执行 |
+
+真实同步需配置正确的管理凭据并显式启用真实模式。数据库、环境文件及加密密钥不能进入 Git 或镜像；备份数据库时保留对应密钥，日志不得输出凭据。不要使用生产组织做开发测试。
+
+## 生产部署与回滚
+
+当前 Docker 容器名为 `claw-dashboard`，工作目录 `/opt/dashboard`，数据挂载 `/data/claw`，仅监听 `127.0.0.1:5000`，经主站 `/kaoqin/` 反代访问。反代需透传 Authorization；嵌入页需同源并允许访问主站存储。
+
+更新流程：固定已验收提交 → 备份数据/密钥与运行配置 → 构建版本化镜像并执行隔离测试 → 保留旧容器后切换 → 验证健康、数据、权限、TV 和静态资源。不要直接删除旧容器或用未固定的 latest 覆盖回滚点。
+
+应用回滚优先恢复旧容器并继续使用现有数据；数据库恢复需另外核对新增数据，不应自动覆盖。历史 `deploy.sh` 等脚本不代表当前生产发布流程，执行前须核对目标和备份条件。
+
+## API 概览
+
+以下是应用内路径，生产需加 `/kaoqin` 前缀。除两个 TV GET/HEAD 接口外，全部 `/api/` 业务接口需要有效管理角色 Bearer。
+
+| 路径 | 方法 | 用途 |
+| --- | --- | --- |
+| `/api/access` | GET | 当前身份与管理能力 |
+| `/api/tv/data` | GET | 公开展示数据白名单 |
+| `/api/tv/events` | GET | 公开失效通知，无业务明细 |
+| `/api/projects` | GET/POST | 项目读取/创建 |
+| `/api/projects/:id` | PUT/DELETE | 修改/删除项目 |
+| `/api/persons` | GET/POST | 人员读取/创建 |
+| `/api/assignments` | GET/POST | 排期读取/创建 |
+| `/api/config` | GET/POST | 配置读取/保存 |
+| `/api/export`、`/api/export/assignments/csv` | GET | JSON/排期 CSV 导出 |
+| `/api/project-sync/:id/preview`、`/api/project-sync/:id/run` | POST | 单项目预览/执行 |
+| `/api/project-sync/global/preview`、`/api/project-sync/global/run` | POST | 全局预览/执行 |
+| `/api/project-sync/schedule` | GET/POST | 调度读取/配置 |
+| `/health` | GET | 非敏感健康状态 |
+
+旧 `/api/events` 原始事件流已关闭。其余绑定、请假、同步日志等接口以 `app.py` 为准。
+
+## 代码导航
+
+- `app.py`：Flask API、TV 展示数据、SSE 与调度。
+- `access_control.py`：后端身份校验及角色授权。
+- `project_sync.py`：组织、身份匹配、归档过滤和审计。
+- `static/access.js`：前端权限检查、认证请求与下载。
+- `static/board.js`、`static/admin.js`：看板与管理页面。
+- `test_*.py`、`tests/`：隔离测试与浏览器验收。
+- `docs/`：阶段记录、权限方案、发布与回滚证据。历史规则以本 README 和最新发布记录为准。

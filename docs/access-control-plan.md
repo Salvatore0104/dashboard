@@ -2,6 +2,8 @@
 
 实施基线：`b2af8f3`；开发分支：`feat/dashboard-access-control`。
 
+当前状态：代码 `0110182` 已生产部署，用户已明确确认验收通过，并授权同步 GitHub 主分支及更新文档。以下开发阶段的待验收说明保留为历史证据；当前发布结果见 [发布记录](access-production-release-20260922.md)。
+
 ## 产品约定
 
 仅 Dashboard 前后端改造。TV 继续匿名展示，保持布局、项目、人员、请假类型和日期。
@@ -40,7 +42,7 @@ npx --yes --package @playwright/cli playwright-cli -s=dashboard-access open http
 npx --yes --package @playwright/cli playwright-cli -s=dashboard-access run-code --filename tests/access-browser-checks.js
 ```
 
-## 发布前尚需真实环境验收
+## 开发阶段验收边界（历史记录）
 
 本地模拟浏览器不是生产 iframe 验收。公开 API 文档本轮确认 `/auth/self`、`/auth/introspect` 存在，但没有响应 schema。真实 user/operator/manager 的角色数组契约沿用前次已验证结果，本轮没有重新登录这些账号；真实 admin 尚未验收。
 
