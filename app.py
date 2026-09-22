@@ -404,6 +404,36 @@ def refresh_project_sync_identities():
         conn.close()
 
 
+@app.route('/api/project-sync/identities/preview', methods=['POST'])
+def preview_project_sync_identities():
+    conn = get_db()
+    try:
+        users = EasyAIClient(load_easyai_runtime_config(conn)).list_users()
+        matches = identity_inventory_preview(conn, users)
+        return jsonify({'success': True, 'total': len(matches), 'matched': sum(item['status'] in {'auto_matched', 'confirmed'} for item in matches), 'bindable': sum(item['status'] == 'auto_matched' for item in matches), 'candidate': sum(item['status'] == 'candidate' for item in matches), 'unmatched': sum(item['status'] == 'unmatched' for item in matches), 'conflict': sum(item['status'] == 'conflict' for item in matches)})
+    except Exception as exc:
+        return jsonify({'success': False, 'message': redact_error(exc)}), 400
+    finally:
+        conn.close()
+
+
+@app.route('/api/project-sync/identities/bind-all', methods=['POST'])
+def bind_all_project_sync_identities():
+    conn = get_db()
+    try:
+        operator_id = (request.json or {}).get('operatorId', 'local-admin')
+        users = EasyAIClient(load_easyai_runtime_config(conn)).list_users()
+        matches = refresh_identity_inventory(conn, users, operator_id)
+        bound = sum(item['status'] == 'auto_matched' for item in matches)
+        conn.commit()
+        return jsonify({'success': True, 'total': len(matches), 'bound': bound, 'matched': sum(item['status'] in {'auto_matched', 'confirmed'} for item in matches), 'candidate': sum(item['status'] == 'candidate' for item in matches), 'unmatched': sum(item['status'] == 'unmatched' for item in matches), 'conflict': sum(item['status'] == 'conflict' for item in matches)})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({'success': False, 'message': redact_error(exc)}), 400
+    finally:
+        conn.close()
+
+
 @app.route('/api/project-sync/identities/<user_id>/confirm', methods=['POST'])
 def confirm_project_sync_identity(user_id):
     data = request.json or {}

@@ -8,7 +8,7 @@ from pathlib import Path
 os.environ.setdefault("EASYAI_SYNC_MODE", "mock")
 os.environ.setdefault("EASYAI_SYNC_ENABLED", "true")
 
-from project_sync import EasyAIClient, ProjectSyncCoordinator, encrypt_secret, ensure_tables, ensure_binding, iter_organizations, load_easyai_runtime_config, match_identities, normalize_name, organization_id, persist_identity_matches, preview_all_projects, preview_project, refresh_identity_inventory, redact_error, sync_all_projects, sync_project, test_org_name
+from project_sync import EasyAIClient, ProjectSyncCoordinator, encrypt_secret, ensure_tables, ensure_binding, identity_inventory_preview, iter_organizations, load_easyai_runtime_config, match_identities, normalize_name, organization_id, persist_identity_matches, preview_all_projects, preview_project, refresh_identity_inventory, redact_error, sync_all_projects, sync_project, test_org_name
 
 
 class ProjectSyncUnitTests(unittest.TestCase):
@@ -86,6 +86,12 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM external_user_identity").fetchone()[0], 2)
         self.assertEqual(self.conn.execute("SELECT match_status FROM external_user_identity WHERE dashboard_user_id='person-1'").fetchone()[0], 'auto_matched')
         self.assertEqual(self.conn.execute("SELECT match_status FROM external_user_identity WHERE dashboard_user_id='person-2'").fetchone()[0], 'candidate')
+
+    def test_identity_inventory_preview_is_read_only(self):
+        self.conn.execute("INSERT INTO persons (id, name, ding_id, dingtalk_union_id) VALUES ('person-1', '张三', 'ding-1', 'union-1')")
+        rows = identity_inventory_preview(self.conn, [{'id': 'easy-1', 'username': 'dingtalk_ding-1'}])
+        self.assertEqual(rows[0]['status'], 'auto_matched')
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM external_user_identity").fetchone()[0], 0)
 
     def test_persist_rejects_duplicate_easyai_identity(self):
         matches = [

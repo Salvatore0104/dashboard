@@ -48,7 +48,7 @@
       "btProjectId", "btProjectName", "projectBusinessTrip", "projectBusinessTripStart", "projectBusinessTripEnd", "businessTripPersons",
       "syncPersonsList", "syncPersonsStatus", "leavePersonName", "leaveType", "leaveStart", "leaveEnd",
       "projectTitle", "defaultAssignDays", "dingAppKey", "dingAppSecret", "dingTestResult",
-      "identityBody", "refreshIdentityBtn",
+      "identityBody", "refreshIdentityBtn", "bindAllIdentityBtn",
       "themePrimary", "deptColorGrid", "statusColorGrid", "tripUpcomingColor", "tripActiveColor", "leaveActiveColor", "leaveUpcomingColor", "conflictColor",
       "easyaiAdminUsername", "easyaiAdminPassword", "easyaiAdminCredentialsStatus", "easyaiTestResult"
     ].forEach((id) => els[id] = document.getElementById(id));
@@ -82,6 +82,7 @@
     byId("testDingTalkBtn").addEventListener("click", testDingTalk);
     byId("testEasyAIKeyBtn").addEventListener("click", testEasyAIConnection);
     els.refreshIdentityBtn.addEventListener("click", refreshIdentities);
+    els.bindAllIdentityBtn.addEventListener("click", bindAllIdentities);
     byId("saveEasyAICredentialsBtn").addEventListener("click", saveEasyAICredentials);
     byId("editDingBtn").addEventListener("click", enableDingEdit);
     byId("saveDingBtn").addEventListener("click", saveDingConfig);
@@ -145,6 +146,17 @@
     toast(`身份盘点完成：已绑定 ${result.matched}，候选 ${result.candidate}，未匹配 ${result.unmatched}，冲突 ${result.conflict}`);
     await loadIdentities();
     if (state.syncUsers.length) renderSyncUsers();
+  }
+
+  async function bindAllIdentities() {
+    const preview = await fetchJson("api/project-sync/identities/preview", { method: "POST" }).catch((error) => ({ success: false, message: error.message }));
+    if (!preview.success) return toast(preview.message || "无法生成身份绑定预览");
+    const confirmed = confirm(`全量身份绑定预览\n\n共 ${preview.total} 人\n可自动绑定 ${preview.bindable} 人\n已绑定 ${preview.matched - preview.bindable} 人\n昵称候选 ${preview.candidate} 人\n冲突 ${preview.conflict} 人\n未匹配 ${preview.unmatched} 人\n\n确认后只绑定唯一稳定 ID 匹配，不按昵称误绑，不修改 wowidea 原组织。`);
+    if (!confirmed) return;
+    const result = await fetchJson("api/project-sync/identities/bind-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) }).catch((error) => ({ success: false, message: error.message }));
+    if (!result.success) return toast(result.message || "批量绑定失败");
+    toast(`批量绑定完成：新增绑定 ${result.bound}，冲突 ${result.conflict}，未匹配 ${result.unmatched}`);
+    await loadIdentities();
   }
 
   function applyThemeConfig() {
