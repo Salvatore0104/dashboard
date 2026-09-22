@@ -406,7 +406,16 @@
         ...DEPTS.map(d => d.name).filter(name => groups.has(name)),
         ...[...groups.keys()].filter(name => !DEPTS.some(d => d.name === name))
       ])];
-      const html = deptOrder.map((deptName) => {
+      const rowForDept = (deptName) => {
+        const name = String(deptName || "");
+        if (name.includes("后期") || name.includes("前期") || name.includes("美术")) return 0;
+        if (["项目管理组", "演艺制作部", "视觉工程部", "市场部"].some((item) => name.includes(item))) return 1;
+        return 2;
+      };
+      const rows = [[], [], []];
+      deptOrder.forEach((deptName) => rows[rowForDept(deptName)].push(deptName));
+      const html = rows.map((row, rowIndex) => {
+        const groupsHtml = row.map((deptName) => {
         const persons = groups.get(deptName) || [];
         if (!persons.length) return "";
         const collapsed = this.state.collapsedDepts.has(deptName);
@@ -421,6 +430,8 @@
             </button>
             <div class="dept-chips" ${collapsed ? 'style="display:none"' : ""}>${chips}</div>
           </section>`;
+        }).join("");
+        return groupsHtml ? `<div class="dept-row dept-row-${rowIndex + 1}">${groupsHtml}</div>` : "";
       }).join("");
       this.els.personChips.innerHTML = html || `<div class="empty-state"><div class="empty-box">${Icons.svg("users")}<p>暂无人员，请在后台同步或添加人员。</p></div></div>`;
       this.bindPoolEvents();

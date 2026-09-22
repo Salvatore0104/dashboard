@@ -372,6 +372,19 @@ a {
   gap: 10px;
 }
 
+/* 人员池按工作属性分成三条横向带；部门卡片和人员芯片都可在窄屏自动换行。 */
+.dept-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.dept-row .dept-group {
+  flex: 1 1 280px;
+  min-width: min(280px, 100%);
+}
+
 .dept-group {
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
