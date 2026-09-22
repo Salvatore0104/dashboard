@@ -8,7 +8,7 @@ from pathlib import Path
 os.environ.setdefault("EASYAI_SYNC_MODE", "mock")
 os.environ.setdefault("EASYAI_SYNC_ENABLED", "true")
 
-from project_sync import EasyAIClient, ProjectSyncCoordinator, encrypt_secret, ensure_tables, ensure_binding, iter_organizations, load_easyai_runtime_config, match_identities, normalize_name, organization_id, persist_identity_matches, preview_project, refresh_identity_inventory, redact_error, sync_project, test_org_name
+from project_sync import EasyAIClient, ProjectSyncCoordinator, encrypt_secret, ensure_tables, ensure_binding, iter_organizations, load_easyai_runtime_config, match_identities, normalize_name, organization_id, persist_identity_matches, preview_all_projects, preview_project, refresh_identity_inventory, redact_error, sync_all_projects, sync_project, test_org_name
 
 
 class ProjectSyncUnitTests(unittest.TestCase):
@@ -181,6 +181,15 @@ class ProjectSyncUnitTests(unittest.TestCase):
     def test_sync_run_schema_has_existing_count(self):
         columns = {row[1] for row in self.conn.execute("PRAGMA table_info(sync_run)").fetchall()}
         self.assertIn('existing_count', columns)
+
+    def test_global_preview_includes_orphan_as_pending_delete(self):
+        self.conn.execute("INSERT INTO projects (id, name, start_date, end_date) VALUES ('p-live', '在线项目', '', '')")
+        self.conn.execute("INSERT INTO project_easyai_binding (project_id, easyai_org_id, parent_org_id, organization_name, status) VALUES ('p-live', 'org-live', 'parent', '[TEST][dashboard-local] 在线项目', 'active')")
+        self.conn.execute("INSERT INTO project_easyai_binding (project_id, easyai_org_id, parent_org_id, organization_name, status) VALUES ('p-deleted', 'org-deleted', 'parent', '[TEST][dashboard-local] 已删除项目', 'active')")
+        result = preview_all_projects(self.conn)
+        deleted = next(item for item in result['projects'] if item['project']['id'] == 'p-deleted')
+        self.assertEqual(deleted['organization_action'], 'pending_delete')
+        self.assertEqual(result['totals']['pending_delete'], 1)
 
     def test_project_sync_coordinator_skips_overlapping_project(self):
         coordinator = ProjectSyncCoordinator()
