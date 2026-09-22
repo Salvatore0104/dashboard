@@ -34,6 +34,7 @@
             <button class="btn btn-primary" id="addProjectBtn" type="button"><span data-icon="plus"></span>添加项目</button>
             <button class="btn btn-success" id="globalSyncBtn" type="button"><span data-icon="refresh"></span>同步组织</button>
             <button class="btn btn-success" id="syncPersonsBtn" type="button"><span data-icon="refresh"></span>同步人员</button>
+            <button class="btn" id="bindPersonsBtn" type="button"><span data-icon="link"></span>绑定人员</button>
             <button class="btn btn-success" id="syncLeaveBtn" type="button"><span data-icon="refresh"></span>同步请假</button>
             <button class="btn" id="configBtn" type="button"><span data-icon="admin"></span>系统配置</button>
             <button class="btn" id="exportJsonBtn" type="button"><span data-icon="download"></span>导出 JSON</button>
@@ -71,19 +72,6 @@
             <span class="tag tag-primary" id="personCount">0 人</span>
           </div>
           <div id="personList"></div>
-        </section>
-
-        <section class="card">
-          <div class="card-head">
-            <h2 class="card-title"><span data-icon="users"></span>钉钉身份关联</h2>
-            <button class="btn btn-sm" id="refreshIdentityBtn" type="button"><span data-icon="refresh"></span>刷新</button>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Dashboard 用户</th><th>钉钉 ID</th><th>wowidea 用户 ID</th><th>状态</th><th>操作</th></tr></thead>
-              <tbody id="identityBody"><tr><td colspan="5" class="table-empty">读取中</td></tr></tbody>
-            </table>
-          </div>
         </section>
 
         <section class="card">
@@ -186,6 +174,28 @@
         <button class="btn" data-close-modal="syncPersonsModal" type="button">取消</button>
         <button class="btn btn-primary" id="saveSelectedPersonsBtn" type="button"><span data-icon="save"></span>同步选中人员（0）</button>
       </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="bindingModal">
+    <div class="modal modal-wide">
+      <div class="modal-head">
+        <h2 class="card-title"><span data-icon="link"></span>绑定人员</h2>
+        <button class="btn btn-sm" data-close-modal="bindingModal" type="button"><span data-icon="close"></span></button>
+      </div>
+      <div class="modal-body">
+        <div class="inline-actions">
+          <button class="btn btn-success" id="refreshIdentityBtn" type="button"><span data-icon="refresh"></span>刷新绑定状态</button>
+          <span class="muted">按钉钉稳定 ID 匹配 wowidea 用户，绑定操作不会修改原组织。</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Dashboard 用户</th><th>钉钉 ID</th><th>wowidea 用户 ID</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody id="identityBody"><tr><td colspan="5" class="table-empty">读取中</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-foot"><button class="btn" data-close-modal="bindingModal" type="button">关闭</button></div>
     </div>
   </div>
 

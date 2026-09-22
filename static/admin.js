@@ -41,7 +41,7 @@
   function cache() {
     [
       "navTitle", "projectBody", "personList", "leaveRecordList", "projectCount", "personCount", "leaveRecordCount",
-      "projectModal", "businessTripModal", "syncPersonsModal", "leaveModal", "configModal", "toast",
+      "projectModal", "businessTripModal", "syncPersonsModal", "bindingModal", "leaveModal", "configModal", "toast",
       "globalSyncModal", "globalSyncSummary", "globalSyncBody", "globalSyncPreviewBtn", "globalSyncRunBtn",
       "projectModalTitle", "projectName", "projectStart", "projectEnd", "projectColorPicker",
       "btProjectId", "btProjectName", "projectBusinessTrip", "projectBusinessTripStart", "projectBusinessTripEnd", "businessTripPersons",
@@ -64,6 +64,7 @@
     els.globalSyncPreviewBtn.addEventListener("click", previewGlobalSync);
     els.globalSyncRunBtn.addEventListener("click", runGlobalSync);
     byId("syncPersonsBtn").addEventListener("click", openSyncPersonsModal);
+    byId("bindPersonsBtn").addEventListener("click", openBindingModal);
     byId("configBtn").addEventListener("click", openConfigModal);
     byId("syncLeaveBtn").addEventListener("click", syncLeaveNow);
     byId("exportJsonBtn").addEventListener("click", () => location.href = "api/export");
@@ -102,6 +103,10 @@
     renderProjects();
     renderPersons();
     renderLeaves();
+  }
+
+  function openBindingModal() {
+    openModal("bindingModal");
     loadIdentities();
   }
 
@@ -831,13 +836,10 @@
     const renderUserCard = (user) => {
       const id = user.id || user.dingId;
       const existing = state.persons.some((p) => String(p.id) === String(id) || String(p.ding_id) === String(id));
-      const identity = state.identityByDingId.get(String(id));
-      const binding = identity?.easyai_user_id ? `已绑定 · ${identity.easyai_user_id}` : (identity?.match_status === "conflict" ? "身份冲突" : (identity?.match_status === "candidate" ? "待确认候选" : "未绑定"));
       return `<label class="sync-user-card ${existing ? "existing" : ""}">
         <input type="checkbox" value="${esc(id)}" ${existing ? "disabled" : ""}>
         <span class="person-dot" style="background:${personColor({ department: user.department || "", group_type: inferGroupType(user.department || user.title || "") })}">${esc(String(user.name || "?").slice(0, 1))}</span>
         <span class="person-main"><strong>${esc(user.name || "未命名")}</strong><small>${esc(user.department || "未分组")}</small></span>
-        <span class="tag ${identity?.easyai_user_id ? "tag-primary" : ""}">${esc(binding)}</span>
       </label>`;
     };
 
