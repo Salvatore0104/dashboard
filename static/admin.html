@@ -33,6 +33,7 @@
           <div class="toolbar-actions">
             <button class="btn btn-primary" id="addProjectBtn" type="button"><span data-icon="plus"></span>添加项目</button>
             <button class="btn btn-success" id="globalSyncBtn" type="button"><span data-icon="refresh"></span>同步组织</button>
+            <button class="btn" id="globalSyncLogsBtn" type="button"><span data-icon="list"></span>查看同步日志</button>
             <button class="btn btn-success" id="syncPersonsBtn" type="button"><span data-icon="refresh"></span>同步人员</button>
             <button class="btn" id="bindPersonsBtn" type="button"><span data-icon="link"></span>绑定人员</button>
             <button class="btn btn-success" id="syncLeaveBtn" type="button"><span data-icon="refresh"></span>同步请假</button>
@@ -124,6 +125,14 @@
         <button class="btn btn-primary" id="globalSyncPreviewBtn" type="button"><span data-icon="refresh"></span>生成预览</button>
         <button class="btn btn-success" id="globalSyncRunBtn" type="button" disabled><span data-icon="play"></span>确认执行</button>
       </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="globalSyncLogsModal">
+    <div class="modal modal-wide">
+      <div class="modal-head"><h2 class="card-title"><span data-icon="list"></span>全局同步日志</h2><button class="btn btn-sm" data-close-modal="globalSyncLogsModal" type="button"><span data-icon="close"></span></button></div>
+      <div class="modal-body"><div class="table-wrap"><table><thead><tr><th>时间</th><th>状态</th><th>新增</th><th>已存在</th><th>未匹配</th><th>冲突</th><th>待处理删除</th></tr></thead><tbody id="globalSyncLogsBody"><tr><td colspan="7" class="table-empty">读取中</td></tr></tbody></table></div></div>
+      <div class="modal-foot"><button class="btn" data-close-modal="globalSyncLogsModal" type="button">关闭</button></div>
     </div>
   </div>
 

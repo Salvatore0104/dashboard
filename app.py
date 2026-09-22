@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env.local'), override=False)
 load_dotenv(override=False)
 
-from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, preview_all_projects, sync_all_projects, refresh_identity_inventory, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, load_easyai_runtime_config, normalize_bearer_token, mask_secret, EasyAIClient, ProjectSyncCoordinator
+from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, preview_all_projects, sync_all_projects, refresh_identity_inventory, identity_inventory_preview, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, load_easyai_runtime_config, normalize_bearer_token, mask_secret, EasyAIClient, ProjectSyncCoordinator
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
@@ -326,6 +326,23 @@ def project_sync_runs():
     rows = conn.execute('SELECT * FROM sync_run ORDER BY started_at DESC LIMIT 100').fetchall()
     conn.close()
     return jsonify([dict(row) for row in rows])
+
+
+@app.route('/api/project-sync/global/logs', methods=['GET'])
+def project_sync_global_logs():
+    conn = get_db()
+    rows = conn.execute("SELECT id, trigger, status, started_at, finished_at, added_count, existing_count, unmatched_count, conflict_count, error_count, details FROM sync_run WHERE project_id='__global__' ORDER BY started_at DESC LIMIT 100").fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        item = dict(row)
+        try:
+            details = json.loads(item.pop('details') or '{}')
+        except (TypeError, ValueError):
+            details = {}
+        item['totals'] = details.get('totals', {})
+        result.append(item)
+    return jsonify(result)
 
 
 @app.route('/api/project-sync/global/preview', methods=['POST'])

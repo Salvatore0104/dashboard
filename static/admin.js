@@ -43,6 +43,7 @@
       "navTitle", "projectBody", "personList", "leaveRecordList", "projectCount", "personCount", "leaveRecordCount",
       "projectModal", "businessTripModal", "syncPersonsModal", "bindingModal", "leaveModal", "configModal", "toast",
       "globalSyncModal", "globalSyncSummary", "globalSyncBody", "globalSyncPreviewBtn", "globalSyncRunBtn",
+      "globalSyncLogsModal", "globalSyncLogsBody",
       "projectModalTitle", "projectName", "projectStart", "projectEnd", "projectColorPicker",
       "btProjectId", "btProjectName", "projectBusinessTrip", "projectBusinessTripStart", "projectBusinessTripEnd", "businessTripPersons",
       "syncPersonsList", "syncPersonsStatus", "leavePersonName", "leaveType", "leaveStart", "leaveEnd",
@@ -61,6 +62,7 @@
   function bind() {
     byId("addProjectBtn").addEventListener("click", () => openProjectModal());
     byId("globalSyncBtn").addEventListener("click", openGlobalSyncModal);
+    byId("globalSyncLogsBtn").addEventListener("click", openGlobalSyncLogs);
     els.globalSyncPreviewBtn.addEventListener("click", previewGlobalSync);
     els.globalSyncRunBtn.addEventListener("click", runGlobalSync);
     byId("syncPersonsBtn").addEventListener("click", openSyncPersonsModal);
@@ -277,6 +279,21 @@
       toast(error.message || "全局同步失败");
     } finally {
       els.globalSyncRunBtn.disabled = false;
+    }
+  }
+
+  async function openGlobalSyncLogs() {
+    els.globalSyncLogsBody.innerHTML = `<tr><td colspan="7" class="table-empty">读取中</td></tr>`;
+    openModal("globalSyncLogsModal");
+    try {
+      const rows = await fetchJson("api/project-sync/global/logs");
+      els.globalSyncLogsBody.innerHTML = rows.length ? rows.map((row) => {
+        const t = row.totals || {};
+        const time = row.started_at ? new Date(Number(row.started_at)).toLocaleString() : "-";
+        return `<tr><td>${esc(time)}</td><td>${esc(row.status || "-")}</td><td>${t.added ?? row.added_count ?? 0}</td><td>${t.existing ?? row.existing_count ?? 0}</td><td>${t.unmatched ?? row.unmatched_count ?? 0}</td><td>${t.conflict ?? row.conflict_count ?? 0}</td><td>${t.pending_delete ?? 0}</td></tr>`;
+      }).join("") : `<tr><td colspan="7" class="table-empty">暂无全局同步日志</td></tr>`;
+    } catch (error) {
+      els.globalSyncLogsBody.innerHTML = `<tr><td colspan="7" class="table-empty">${esc(error.message || "读取失败")}</td></tr>`;
     }
   }
 

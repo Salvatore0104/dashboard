@@ -547,6 +547,12 @@ def refresh_identity_inventory(conn, easyai_users, operator_id=""):
     return matches
 
 
+def identity_inventory_preview(conn, easyai_users):
+    """Build a read-only full inventory preview for admin confirmation."""
+    members = [dict(row) for row in conn.execute("SELECT id, name, ding_id, COALESCE(dingtalk_union_id, '') AS dingtalk_union_id FROM persons ORDER BY name").fetchall()]
+    return match_identities(conn, members, easyai_users)
+
+
 def ensure_binding(conn, project_id, project_name):
     existing = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project_id,)).fetchone()
     if existing and existing["easyai_org_id"]:
@@ -699,7 +705,6 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
 def preview_all_projects(conn):
     """Build a read-only global diff, including orphaned project bindings."""
     projects = conn.execute("SELECT * FROM projects ORDER BY start_date, id").fetchall()
-    project_ids = {str(row["id"]) for row in projects}
     rows = []
     for project in projects:
         binding = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project["id"],)).fetchone()
@@ -710,13 +715,10 @@ def preview_all_projects(conn):
             item["name_action"] = "rename"
         item["parent_action"] = "unchanged"
         rows.append(item)
-    orphaned = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id NOT IN ({})".format(",".join("?" for _ in project_ids) if project_ids else "NULL"), tuple(project_ids)).fetchall()
-    for binding in orphaned:
-        rows.append({"project": {"id": binding["project_id"], "name": binding["organization_name"]}, "binding": dict(binding), "members": [], "added": 0, "existing": 0, "unmatched": 0, "conflict": 0, "removed": 0, "organization_action": "pending_delete", "name_action": "unchanged", "parent_action": "unchanged", "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real"})
     totals = {key: sum(int(item.get(key, 0) or 0) for item in rows) for key in ("added", "existing", "unmatched", "conflict", "removed")}
     totals["create_org"] = sum(item.get("organization_action") == "create" for item in rows)
     totals["rename_org"] = sum(item.get("name_action") == "rename" for item in rows)
-    totals["pending_delete"] = sum(item.get("organization_action") == "pending_delete" for item in rows)
+    totals["pending_delete"] = 0
     return {"projects": rows, "totals": totals, "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real"}
 
 
@@ -724,6 +726,12 @@ def sync_all_projects(conn, operator_id="local-admin"):
     """Synchronize all live projects and mark deleted-project bindings safely."""
     preview = preview_all_projects(conn)
     results = []
+    project_ids = {str(item["project"]["id"]) for item in preview["projects"]}
+    orphaned = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id NOT IN ({})".format(",".join("?" for _ in project_ids) if project_ids else "NULL"), tuple(project_ids)).fetchall()
+    for binding in orphaned:
+        conn.execute("UPDATE project_easyai_binding SET status='pending_delete', last_error='项目已删除，线上组织待人工确认清理', updated_at=datetime('now') WHERE project_id=?", (binding["project_id"],))
+        conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, result, error_code, created_at) VALUES (?, ?, ?, 'global_sync_pending_delete', ?, 'pending_delete', 'PROJECT_DELETED', ?)", (str(uuid.uuid4()), operator_id, binding["project_id"], binding["easyai_org_id"] or "", now_ms()))
+        results.append({"project_id": binding["project_id"], "project_name": binding["organization_name"], "status": "pending_delete", "added": 0, "existing": 0, "unmatched": 0, "conflict": 0, "removed": 0})
     for item in preview["projects"]:
         project = item["project"]
         project_id = str(project["id"])
@@ -742,4 +750,6 @@ def sync_all_projects(conn, operator_id="local-admin"):
     totals = {key: sum(int(item.get(key, 0) or 0) for item in results) for key in ("added", "existing", "unmatched", "conflict", "removed")}
     totals["failed"] = sum(item["status"] == "failed" for item in results)
     totals["pending_delete"] = sum(item["status"] == "pending_delete" for item in results)
-    return {"success": totals["failed"] == 0, "projects": results, "totals": totals}
+    run_id = str(uuid.uuid4())
+    conn.execute("INSERT INTO sync_run (id, project_id, trigger, status, started_at, finished_at, added_count, existing_count, unmatched_count, conflict_count, details) VALUES (?, ?, 'global', ?, ?, ?, ?, ?, ?, ?, ?)", (run_id, '__global__', 'succeeded' if totals['failed'] == 0 else 'failed', now_ms(), now_ms(), totals['added'], totals['existing'], totals['unmatched'], totals['conflict'], json.dumps({'projects': results, 'totals': totals}, ensure_ascii=False)))
+    return {"success": totals["failed"] == 0, "run_id": run_id, "projects": results, "totals": totals}

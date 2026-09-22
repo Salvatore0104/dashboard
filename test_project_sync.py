@@ -182,14 +182,13 @@ class ProjectSyncUnitTests(unittest.TestCase):
         columns = {row[1] for row in self.conn.execute("PRAGMA table_info(sync_run)").fetchall()}
         self.assertIn('existing_count', columns)
 
-    def test_global_preview_includes_orphan_as_pending_delete(self):
+    def test_global_preview_excludes_orphan_from_current_diff(self):
         self.conn.execute("INSERT INTO projects (id, name, start_date, end_date) VALUES ('p-live', '在线项目', '', '')")
         self.conn.execute("INSERT INTO project_easyai_binding (project_id, easyai_org_id, parent_org_id, organization_name, status) VALUES ('p-live', 'org-live', 'parent', '[TEST][dashboard-local] 在线项目', 'active')")
         self.conn.execute("INSERT INTO project_easyai_binding (project_id, easyai_org_id, parent_org_id, organization_name, status) VALUES ('p-deleted', 'org-deleted', 'parent', '[TEST][dashboard-local] 已删除项目', 'active')")
         result = preview_all_projects(self.conn)
-        deleted = next(item for item in result['projects'] if item['project']['id'] == 'p-deleted')
-        self.assertEqual(deleted['organization_action'], 'pending_delete')
-        self.assertEqual(result['totals']['pending_delete'], 1)
+        self.assertEqual([item['project']['id'] for item in result['projects']], ['p-live'])
+        self.assertEqual(result['totals']['pending_delete'], 0)
 
     def test_project_sync_coordinator_skips_overlapping_project(self):
         coordinator = ProjectSyncCoordinator()
