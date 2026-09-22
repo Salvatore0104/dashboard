@@ -310,6 +310,54 @@ class LifecycleAcceptanceTests(unittest.TestCase):
         self.assertEqual(normalized["success_ids"], [])
         self.assertTrue(normalized["partial"])
 
+    def test_consistency_checks_live_members_name_parent_and_orphans(self):
+        self.add_project("p-a", "Project A")
+        self.add_person_assignment("p-a")
+        self.conn.execute("INSERT INTO external_user_identity (dashboard_user_id,easyai_user_id,match_status) VALUES ('person-a','easy-a','confirmed')")
+        self.conn.commit()
+        remote = [{"id": "parent", "name": project_sync.PARENT_ORG_NAME},
+                  {"id": "org-p-a", "name": "Project A", "parent": "parent", "users": [{"id": "easy-a"}], "userCount": 1}]
+        with patch.object(self.fake, "list_organizations", return_value=remote, create=True):
+            self.assertEqual(project_sync.organization_consistency(self.conn)["state"], "consistent")
+            remote[1]["users"] = []; remote[1]["userCount"] = 0
+            self.assertEqual(project_sync.organization_consistency(self.conn)["state"], "different")
+            remote[1]["users"] = [{"id": "easy-a"}]; remote[1]["userCount"] = 1
+            remote[1]["name"] = "wrong"
+            self.assertEqual(project_sync.organization_consistency(self.conn)["state"], "different")
+            remote[1]["name"] = "Project A"; remote[1]["parent"] = "wrong"
+            self.assertEqual(project_sync.organization_consistency(self.conn)["state"], "different")
+            remote[1]["parent"] = "parent"
+            self.conn.execute("UPDATE external_user_identity SET match_status='unmatched'")
+            self.assertEqual(project_sync.organization_consistency(self.conn)["state"], "different")
+            self.conn.execute("UPDATE external_user_identity SET match_status='confirmed'")
+            self.conn.execute("INSERT INTO project_easyai_binding (project_id,easyai_org_id,organization_name,status) VALUES ('deleted-project','orphan-org','Deleted','pending_delete')")
+            remote.append({"id":"orphan-org"})
+            self.assertEqual(project_sync.organization_consistency(self.conn)["pendingCleanup"], 1)
+            remote.pop()
+            del remote[1]["users"]
+            with self.assertRaises(RuntimeError):
+                project_sync.organization_consistency(self.conn)
+
+    def test_overview_schedule_and_binding_badges(self):
+        self.add_project("p-a")
+        self.add_person_assignment("p-a")
+        self.conn.commit()
+        client = dashboard_app.app.test_client()
+        self.assertEqual(client.get('/api/persons').json[0]['wowidea_binding_status'], 'unbound')
+        self.conn.execute("INSERT INTO external_user_identity (dashboard_user_id,easyai_user_id,match_status) VALUES ('person-a','easy-a','confirmed')")
+        self.conn.commit()
+        self.assertEqual(client.get('/api/persons').json[0]['wowidea_binding_status'], 'bound')
+        with patch.object(dashboard_app, 'organization_consistency', return_value={'state':'consistent'}), patch.object(dashboard_app, 'PROJECT_SYNC_SCHEDULER_ENABLED', False):
+            data = client.get('/api/project-sync/overview').json
+            self.assertFalse(data['schedulerEnabled']); self.assertIsNone(data['nextSyncAt'])
+        from unittest.mock import Mock
+        with patch.object(dashboard_app, 'organization_consistency', return_value={'state':'consistent'}), patch.object(dashboard_app, 'PROJECT_SYNC_SCHEDULER_ENABLED', True), patch.object(dashboard_app, 'project_sync_scheduler_thread', Mock(is_alive=lambda: True)), patch.object(dashboard_app, 'project_sync_next_at', 123456789):
+            data = client.get('/api/project-sync/overview').json
+            self.assertTrue(data['schedulerEnabled']); self.assertEqual(data['nextSyncAt'], 123456789)
+        with patch.object(dashboard_app, 'organization_consistency', side_effect=RuntimeError('secret-test-value')):
+            data = client.get('/api/project-sync/overview').json
+            self.assertEqual(data['state'], 'error'); self.assertNotIn('secret-test-value', str(data))
+
     def test_person_sync_preserves_existing_visibility_and_union_id(self):
         self.conn.execute("INSERT INTO persons (id, name, ding_id, dingtalk_union_id, selected) VALUES ('ding-existing', 'Existing', 'ding-existing', 'union-existing', 0)")
         self.conn.commit()

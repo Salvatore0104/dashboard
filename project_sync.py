@@ -695,6 +695,52 @@ def update_project_binding_name(conn, project_id, project_name):
         raise
 
 
+def organization_consistency(conn):
+    """Read current provider state; never infer consistency from local sync history."""
+    if not SYNC_ENABLED or SYNC_MODE != "real":
+        return {"state": "unavailable", "message": "未启用真实组织同步", "projects": 0}
+    client = EasyAIClient(load_easyai_runtime_config(conn))
+    organizations = list(iter_organizations(client.list_organizations()))
+    by_id = {organization_id(org): org for org in organizations}
+    parent_name = PARENT_ORG_NAME
+    parents = [org for org in organizations if str(org.get("name", "")).strip() == parent_name]
+    if len(parents) != 1:
+        return {"state": "error", "message": "执行项目组不存在或名称不唯一", "projects": 0}
+    parent_id = organization_id(parents[0])
+    user_ids = {_user_id(user) for user in client.list_users()}
+    projects = conn.execute("SELECT id, name FROM projects").fetchall()
+    differences = 0
+    for project in projects:
+        binding = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project["id"],)).fetchone()
+        org = by_id.get(str(binding["easyai_org_id"])) if binding else None
+        if not org:
+            differences += 1
+            continue
+        expected = set()
+        unresolved = False
+        for member in project_members(conn, project["id"]):
+            identity = conn.execute("SELECT easyai_user_id, match_status FROM external_user_identity WHERE dashboard_user_id=?", (member["id"],)).fetchone()
+            if not identity or identity["match_status"] not in {"confirmed", "auto_matched"} or str(identity["easyai_user_id"]) not in user_ids:
+                unresolved = True
+            else:
+                expected.add(str(identity["easyai_user_id"]))
+        # Missing membership data is not proof of an empty organization.
+        if not isinstance(org.get("users"), list):
+            raise RuntimeError("平台未返回完整组织成员，无法核对")
+        actual = {_user_id(user) if isinstance(user, dict) else str(user) for user in org["users"]}
+        if int(org.get("userCount", len(actual)) or 0) != len(actual):
+            raise RuntimeError("平台组织成员列表不完整，无法核对")
+        actual_parent = str(org.get("parent") or org.get("parent_id") or org.get("parentId") or "")
+        if unresolved or expected != actual or str(org.get("name", "")) != project["name"] or actual_parent != parent_id:
+            differences += 1
+    orphans = conn.execute("SELECT easyai_org_id FROM project_easyai_binding WHERE project_id NOT IN (SELECT id FROM projects)").fetchall()
+    pending_cleanup = sum(str(row["easyai_org_id"]) in by_id for row in orphans if row["easyai_org_id"])
+    running = conn.execute("SELECT COUNT(*) FROM sync_run WHERE status='running'").fetchone()[0]
+    state = "syncing" if running else "different" if differences or pending_cleanup else "consistent" if projects else "empty"
+    messages = {"syncing": "正在同步", "different": "组织信息待同步", "consistent": "组织信息一致", "empty": "暂无项目"}
+    return {"state": state, "message": messages[state], "projects": len(projects), "differentProjects": differences, "pendingCleanup": pending_cleanup}
+
+
 def preview_project(conn, project_id):
     project = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
     if not project:

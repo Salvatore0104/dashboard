@@ -127,6 +127,8 @@
     if (!els.identityBody) return;
     try {
       const rows = await fetchJson("api/project-sync/identities");
+      state.persons = await fetchJson("api/persons");
+      renderPersons();
       state.identityByDingId = new Map(rows.filter((row) => row.dingtalk_user_id).map((row) => [String(row.dingtalk_user_id), row]));
       if (!rows.length) {
         els.identityBody.innerHTML = `<tr><td colspan="5" class="table-empty">暂无身份记录。先执行项目同步预览或同步钉钉人员。</td></tr>`;
@@ -446,6 +448,7 @@
         <small>${esc(groupLabel)}</small>
       </span>
       ${statusTag}
+      <span class="binding-badge ${person.wowidea_binding_status === "bound" ? "is-bound" : "is-unbound"}" title="wowidea 用户关联状态">${person.wowidea_binding_status === "bound" ? "已绑定" : "未绑定"}</span>
       <label class="board-visibility-toggle"><input type="checkbox" data-toggle-board="${esc(person.id)}" ${person.selected !== 0 && person.selected !== false ? "checked" : ""}>前台显示</label>
       <button class="btn btn-warning btn-sm" data-leave-person="${esc(person.id)}">请假</button>
       <button class="btn btn-danger btn-sm" data-delete-person="${esc(person.id)}">删除</button>

@@ -16,6 +16,8 @@ load_dotenv(override=False)
 
 from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, preview_all_projects, sync_all_projects, cleanup_deleted_binding, refresh_identity_inventory, identity_inventory_preview, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, load_easyai_runtime_config, normalize_bearer_token, mask_secret, EasyAIClient, ProjectSyncCoordinator
 
+from project_sync import organization_consistency
+
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
 
@@ -485,7 +487,11 @@ def unbind_project_sync_identity(user_id):
 @app.route('/api/persons', methods=['GET'])
 def get_persons():
     conn = get_db()
-    rows = conn.execute('SELECT * FROM persons ORDER BY group_type, sort_order, name').fetchall()
+    rows = conn.execute('''SELECT p.*, CASE WHEN i.easyai_user_id IS NOT NULL
+        AND i.easyai_user_id != '' AND i.match_status IN ('confirmed', 'auto_matched')
+        THEN 'bound' ELSE 'unbound' END AS wowidea_binding_status
+        FROM persons p LEFT JOIN external_user_identity i ON i.dashboard_user_id=p.id
+        ORDER BY p.group_type, p.sort_order, p.name''').fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
 
@@ -1599,7 +1605,25 @@ def _project_sync_interval_seconds():
 
 
 PROJECT_SYNC_INTERVAL_SECONDS = _project_sync_interval_seconds()
+project_sync_next_at = None
 project_sync_coordinator = ProjectSyncCoordinator()
+
+
+@app.route('/api/project-sync/overview', methods=['GET'])
+def project_sync_overview():
+    conn = get_db()
+    try:
+        result = organization_consistency(conn)
+    except Exception:
+        # Do not return provider responses or credentials to the browser.
+        result = {"state": "error", "message": "平台核对失败，请在后台测试连接"}
+    finally:
+        conn.close()
+    scheduler_active = bool(PROJECT_SYNC_SCHEDULER_ENABLED and project_sync_scheduler_thread and project_sync_scheduler_thread.is_alive())
+    return jsonify({**result, "checkedAt": int(time.time() * 1000),
+                    "schedulerEnabled": scheduler_active,
+                    "nextSyncAt": project_sync_next_at if scheduler_active else None,
+                    "intervalSeconds": PROJECT_SYNC_INTERVAL_SECONDS})
 
 def sync_assignment_project(project_id, trigger):
     """Run post-write sync without turning an external failure into a local rollback."""
@@ -1643,8 +1667,11 @@ def start_leave_sync_scheduler():
 
 def schedule_project_sync():
     """Run project membership synchronization every configured interval."""
+    global project_sync_next_at
     while True:
+        project_sync_next_at = int((time.time() + PROJECT_SYNC_INTERVAL_SECONDS) * 1000)
         time.sleep(PROJECT_SYNC_INTERVAL_SECONDS)
+        project_sync_next_at = None
         conn = get_db()
         try:
             projects = [row['id'] for row in conn.execute('SELECT id FROM projects ORDER BY id').fetchall()]

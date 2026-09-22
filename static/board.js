@@ -98,6 +98,7 @@
       this.loadData();
       this.connectSSE();
       this.loadSyncStatus();
+      if (this.els.organizationSync) this.state.orgTimer = setInterval(() => this.loadOrganizationStatus(), 60000);
     }
 
     cacheEls() {
@@ -111,6 +112,7 @@
       this.els.daySelect = document.getElementById("daySelect");
       this.els.updateTime = document.getElementById("updateTime");
       this.els.syncStatus = document.getElementById("syncStatusBar");
+      this.els.organizationSync = document.getElementById("organizationSyncStatus");
     }
 
     installShell() {
@@ -204,8 +206,32 @@
             ? `只读看板 · 最后更新 ${new Date().toLocaleTimeString("zh-CN")}`
             : `最后更新 ${new Date().toLocaleTimeString("zh-CN")}`;
         }
+        this.loadOrganizationStatus();
       } catch (error) {
         this.showEmpty(`数据加载失败：${error.message}`);
+      }
+    }
+
+    async loadOrganizationStatus() {
+      const el = this.els.organizationSync;
+      if (!el || this.state.orgLoading) return;
+      this.state.orgLoading = true;
+      el.className = "organization-sync";
+      el.textContent = "wowidea · 正在核对…";
+      try {
+        const data = await fetchJson("api/project-sync/overview");
+        const same = data.state === "consistent";
+        el.className = `organization-sync ${same ? "is-consistent" : "is-pending"}`;
+        const next = data.schedulerEnabled
+          ? (data.nextSyncAt ? `下次同步 ${new Date(data.nextSyncAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "本轮同步中")
+          : "自动同步未开启 · 下次未安排";
+        el.textContent = `${same ? "✓" : "○"} wowidea · ${data.message} · ${next}`;
+        el.title = `核对时间：${new Date(data.checkedAt).toLocaleString("zh-CN")}；核对项目组织名称、所属执行项目组和当前有效成员。每分钟重新核对。`;
+      } catch {
+        el.className = "organization-sync is-pending";
+        el.textContent = "○ wowidea · 核对失败 · 下次同步时间未知";
+      } finally {
+        this.state.orgLoading = false;
       }
     }
 
@@ -321,14 +347,14 @@
         return;
       }
       if (!this.syncMeta.lastSyncTime) {
-        if (textEl) textEl.textContent = `每 ${this.syncMeta.intervalHours} 小时同步`;
+        if (textEl) textEl.textContent = `请假 · 每 ${this.syncMeta.intervalHours} 小时同步`;
         if (countEl) countEl.textContent = "等待首次同步";
         return;
       }
       const elapsed = Date.now() - this.syncMeta.lastSyncTime;
       const total = this.syncMeta.intervalHours * 3600 * 1000;
       const remaining = Math.max(0, total - elapsed);
-      if (textEl) textEl.textContent = `每 ${this.syncMeta.intervalHours} 小时同步`;
+      if (textEl) textEl.textContent = `请假 · 每 ${this.syncMeta.intervalHours} 小时同步`;
       if (countEl) countEl.textContent = formatDuration(remaining);
     }
 
@@ -1414,6 +1440,7 @@
     }
 
     destroy() {
+      if (this.state.orgTimer) clearInterval(this.state.orgTimer);
       this.disconnectSSE();
       if (this.state.syncTimer) clearInterval(this.state.syncTimer);
       if (this.state.resizeTimer) clearTimeout(this.state.resizeTimer);

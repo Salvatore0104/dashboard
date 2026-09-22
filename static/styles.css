@@ -506,6 +506,32 @@ a {
   background: #f0fdf4;
 }
 
+.binding-badge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 2px 5px;
+  border-radius: 5px;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.binding-badge.is-bound { color: #166534; background: #dcfce7; }
+.binding-badge.is-unbound { color: #92400e; background: #fef3c7; }
+.organization-sync {
+  display: inline-flex;
+  padding: 5px 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: #475569;
+  background: #f1f5f9;
+}
+.organization-sync.is-consistent { color: #166534; background: #dcfce7; }
+.organization-sync.is-pending { color: #92400e; background: #fef3c7; }
+.board-layout > .toolbar { flex-wrap: wrap; }
+.board-layout .toolbar-title { flex: 1 1 650px; flex-wrap: wrap; }
+.board-layout .toolbar-title h1 { white-space: nowrap; flex-shrink: 0; }
+.board-layout .toolbar-actions { flex: 0 0 auto; }
+
 .gantt-wrapper {
   background: var(--surface);
   border: 1px solid var(--line);
