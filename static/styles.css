@@ -506,6 +506,7 @@ a {
   background: #f0fdf4;
 }
 
+[hidden] { display: none !important; }
 .binding-badge {
   display: inline-flex;
   align-items: center;

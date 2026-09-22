@@ -254,10 +254,11 @@
         </section>
         <section class="settings-section">
           <h3>钉钉同步</h3>
+          <div class="inline-actions"><span class="tag" id="dingSavedTag">未配置</span><button class="btn btn-sm" id="editDingBtn" type="button">编辑</button></div>
+          <div id="dingCredentialFields" hidden>
           <div class="field"><label>钉钉 AppKey</label>
             <div class="input-row">
               <input class="input" id="dingAppKey" type="text" readonly>
-              <button class="btn btn-sm" id="editDingBtn" type="button">编辑</button>
             </div>
           </div>
           <div class="field"><label>钉钉 AppSecret</label>
@@ -267,29 +268,41 @@
           </div>
           <div class="ding-save-row" id="dingSaveRow" style="display:none">
             <button class="btn btn-primary btn-sm" id="saveDingBtn" type="button"><span data-icon="save"></span>保存钉钉配置</button>
-            <span class="tag tag-primary" id="dingSavedTag" style="display:none">已配置</span>
+            <button class="btn btn-sm" id="cancelDingEditBtn" type="button">取消</button>
           </div>
           <div class="inline-actions">
             <button class="btn btn-success" id="testDingTalkBtn" type="button"><span data-icon="refresh"></span>测试钉钉连接</button>
             <span class="tag" id="dingTestResult" style="display:none"></span>
           </div>
+          </div>
         </section>
         <section class="settings-section">
           <h3>wowidea.top 项目组织同步</h3>
+          <div class="inline-actions"><span class="tag" id="easyaiAdminCredentialsStatus">未配置</span><button class="btn btn-sm" id="editEasyAIBtn" type="button">编辑</button></div>
+          <div id="easyaiCredentialFields" hidden>
           <div class="field"><label>wowidea.top 管理员账号</label>
-            <div class="input-row"><input class="input" id="easyaiAdminUsername" type="text" autocomplete="username" placeholder="输入管理员账号"><span class="tag" id="easyaiAdminCredentialsStatus">未配置</span></div>
+            <div class="input-row"><input class="input" id="easyaiAdminUsername" type="text" autocomplete="off" placeholder="留空保留已保存账号"></div>
           </div>
           <div class="field"><label>wowidea.top 管理员密码</label>
-            <div class="input-row"><input class="input" id="easyaiAdminPassword" type="password" autocomplete="current-password" placeholder="输入管理员密码"></div>
+            <div class="input-row"><input class="input" id="easyaiAdminPassword" type="password" autocomplete="new-password" placeholder="留空保留已保存密码"></div>
           </div>
           <div class="inline-actions">
             <button class="btn btn-primary" id="saveEasyAICredentialsBtn" type="button"><span data-icon="save"></span>保存管理员账号</button>
+            <button class="btn" id="cancelEasyAIEditBtn" type="button">取消</button>
           </div>
           <div class="inline-actions">
             <button class="btn btn-success" id="testEasyAIKeyBtn" type="button"><span data-icon="refresh"></span>测试 wowidea 连接</button>
             <span class="tag" id="easyaiTestResult" style="display:none"></span>
           </div>
           <div class="muted">账号和密码只提交给本地后端加密保存，页面不会回显密码或 JWT。</div>
+          </div>
+        </section>
+        <section class="settings-section">
+          <h3>组织自动同步</h3>
+          <label><input id="projectSyncEnabled" type="checkbox">启用自动同步</label>
+          <div class="field"><label for="projectSyncHours">同步周期（小时）</label><input class="input" id="projectSyncHours" type="number" min="1" max="168" step="1" value="1"></div>
+          <button class="btn btn-primary" id="saveProjectScheduleBtn" type="button">保存同步设置</button>
+          <div class="muted">保存后即时生效，下次执行从保存时间起计算。关闭不影响手动同步。</div>
         </section>
         <section class="settings-section">
           <h3>部门颜色</h3>

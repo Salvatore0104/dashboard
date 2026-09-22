@@ -185,14 +185,16 @@ class LifecycleAcceptanceTests(unittest.TestCase):
             return real_sync(project_conn, project_id, trigger, operator)
 
         # Stop at the next wait: one complete real scheduler loop has executed.
-        with patch.object(dashboard_app.time, "sleep", side_effect=[None, InterruptedError]), \
+        with patch.object(dashboard_app, "PROJECT_SYNC_SCHEDULER_ENABLED", True), \
+             patch.object(dashboard_app.project_sync_wake, "wait", side_effect=[False, InterruptedError]), \
              patch.object(dashboard_app, "sync_project", side_effect=fail_first):
             with self.assertRaises(InterruptedError):
                 dashboard_app.schedule_project_sync()
         row = self.conn.execute("SELECT status,trigger FROM sync_run WHERE project_id='p-b' ORDER BY started_at DESC LIMIT 1").fetchone()
         self.assertEqual(tuple(row), ("succeeded", "scheduler"))
 
-        with patch.object(dashboard_app.time, "sleep", side_effect=[None, InterruptedError]) as sleep:
+        with patch.object(dashboard_app, "PROJECT_SYNC_SCHEDULER_ENABLED", True), \
+             patch.object(dashboard_app.project_sync_wake, "wait", side_effect=[False, InterruptedError]) as sleep:
             with self.assertRaises(InterruptedError):
                 dashboard_app.schedule_project_sync()
         self.assertEqual(sleep.call_args_list[0].args, (dashboard_app.PROJECT_SYNC_INTERVAL_SECONDS,))
@@ -337,6 +339,42 @@ class LifecycleAcceptanceTests(unittest.TestCase):
             del remote[1]["users"]
             with self.assertRaises(RuntimeError):
                 project_sync.organization_consistency(self.conn)
+
+    def test_private_config_and_server_side_dingtalk_credentials(self):
+        self.conn.executemany('INSERT INTO config (key,value) VALUES (?,?)', [('ding_appKey','test-key'),('ding_appSecret','test-secret'),
+            ('easyai_admin_username_encrypted',project_sync.encrypt_secret('test-admin')),
+            ('easyai_admin_password_encrypted',project_sync.encrypt_secret('test-password'))])
+        self.conn.commit()
+        client = dashboard_app.app.test_client()
+        data = client.get('/api/config').json
+        self.assertTrue(data['dingtalk_configured']); self.assertTrue(data['easyai_admin_credentials_configured'])
+        for secret in ['test-key','test-secret','test-admin','test-password']:
+            self.assertNotIn(secret, str(data))
+        self.assertNotIn('easyai_admin_username', data)
+        from unittest.mock import Mock
+        with patch.object(dashboard_app.requests, 'get', return_value=Mock(json=lambda:{'errcode':0})) as http:
+            self.assertTrue(client.post('/api/dingtalk/test',json={}).json['success'])
+            self.assertEqual(http.call_args.kwargs['params'], {'appkey':'test-key','appsecret':'test-secret'})
+        client.post('/api/config',json={'ding_appKey':'','ding_appSecret':''})
+        self.assertEqual(self.conn.execute("SELECT value FROM config WHERE key='ding_appSecret'").fetchone()[0], 'test-secret')
+
+    def test_schedule_settings_validate_persist_and_wake(self):
+        client = dashboard_app.app.test_client()
+        with patch.object(dashboard_app, 'start_project_sync_scheduler') as start, \
+             patch.object(dashboard_app.project_sync_wake, 'set') as wake, \
+             patch.object(dashboard_app, 'PROJECT_SYNC_SCHEDULER_ENABLED',False), \
+             patch.object(dashboard_app, 'PROJECT_SYNC_INTERVAL_SECONDS',3600):
+            self.assertEqual(client.post('/api/project-sync/schedule',json={'enabled':True,'intervalHours':0}).status_code,400)
+            self.assertEqual(client.post('/api/project-sync/schedule',json={'enabled':True,'intervalHours':1.5}).status_code,400)
+            data = client.post('/api/project-sync/schedule',json={'enabled':True,'intervalHours':2}).json
+            self.assertTrue(data['enabled']); self.assertEqual(data['intervalHours'],2)
+            self.assertEqual(dashboard_app.PROJECT_SYNC_INTERVAL_SECONDS,7200)
+            wake.assert_called_once(); start.assert_called_once()
+            dashboard_app.PROJECT_SYNC_SCHEDULER_ENABLED = False
+            dashboard_app.load_project_schedule()
+            self.assertTrue(dashboard_app.PROJECT_SYNC_SCHEDULER_ENABLED)
+            self.assertEqual(dashboard_app.PROJECT_SYNC_INTERVAL_SECONDS,7200)
+            self.assertFalse(client.post('/api/project-sync/schedule',json={'enabled':False,'intervalHours':1}).json['enabled'])
 
     def test_overview_schedule_and_binding_badges(self):
         self.add_project("p-a")

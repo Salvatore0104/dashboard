@@ -95,6 +95,10 @@
     els.bindAllIdentityBtn.addEventListener("click", bindAllIdentities);
     byId("saveEasyAICredentialsBtn").addEventListener("click", saveEasyAICredentials);
     byId("editDingBtn").addEventListener("click", enableDingEdit);
+    byId("cancelDingEditBtn").addEventListener("click", () => setCredentialEditor("ding", false));
+    byId("editEasyAIBtn").addEventListener("click", () => setCredentialEditor("easyai", true));
+    byId("cancelEasyAIEditBtn").addEventListener("click", () => setCredentialEditor("easyai", false));
+    byId("saveProjectScheduleBtn").addEventListener("click", saveProjectSchedule);
     byId("saveDingBtn").addEventListener("click", saveDingConfig);
     els.projectBusinessTrip.addEventListener("change", () => renderBusinessTripPersonPicker(currentTripProject()));
     document.querySelectorAll("[data-close-modal]").forEach((btn) => btn.addEventListener("click", () => closeModal(btn.dataset.closeModal)));
@@ -636,7 +640,7 @@
     els.leaveActiveColor.value = state.config.leave_active_color || "#dc2626";
     els.leaveUpcomingColor.value = state.config.leave_upcoming_color || "#2563eb";
     els.conflictColor.value = state.config.conflict_color || "#dc2626";
-    els.easyaiAdminUsername.value = state.config.easyai_admin_username || "";
+    els.easyaiAdminUsername.value = "";
     els.easyaiAdminPassword.value = "";
     const credentialsConfigured = !!state.config.easyai_admin_credentials_configured;
     els.easyaiAdminCredentialsStatus.textContent = credentialsConfigured ? "已配置" : "未配置";
@@ -648,18 +652,14 @@
     renderDeptColorGrid();
 
     // 钉钉字段：已配置时只读，显示「已配置」标签
-    const hasDing = !!(state.config.ding_appKey && state.config.ding_appSecret);
-    els.dingAppKey.value = state.config.ding_appKey || "";
-    els.dingAppKey.readOnly = hasDing;
-    els.dingAppSecret.value = state.config.ding_appSecret || "";
-    els.dingAppSecret.readOnly = hasDing;
-    const editBtn = byId("editDingBtn");
-    const saveRow = byId("dingSaveRow");
-    const savedTag = byId("dingSavedTag");
-    if (editBtn) editBtn.style.display = hasDing ? "" : "none";
-    if (saveRow) saveRow.style.display = hasDing ? "none" : "flex";
-    if (savedTag) savedTag.style.display = hasDing ? "inline-flex" : "none";
-    if (savedTag) savedTag.className = "tag tag-primary";
+    setCredentialEditor("ding", false);
+    setCredentialEditor("easyai", false);
+    byId("saveProjectScheduleBtn").disabled = true;
+    fetchJson("api/project-sync/schedule").then(data => {
+      byId("projectSyncEnabled").checked = data.enabled;
+      byId("projectSyncHours").value = data.intervalHours;
+      byId("saveProjectScheduleBtn").disabled = false;
+    }).catch(() => toast("同步设置读取失败，请重新打开配置"));
 
     openModal("configModal");
   }
@@ -714,8 +714,8 @@
   async function testDingTalk() {
     els.dingTestResult.style.display = "inline-flex";
     els.dingTestResult.textContent = "正在测试...";
-    const appKey = els.dingAppKey.readOnly ? state.config.ding_appKey : els.dingAppKey.value.trim();
-    const appSecret = els.dingAppKey.readOnly ? state.config.ding_appSecret : els.dingAppSecret.value.trim();
+    const appKey = els.dingAppKey.readOnly ? "" : els.dingAppKey.value.trim();
+    const appSecret = els.dingAppKey.readOnly ? "" : els.dingAppSecret.value.trim();
     const data = await fetchJson("api/dingtalk/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ appKey, appSecret }) });
     els.dingTestResult.textContent = data.message || (data.success ? "连接成功" : "连接失败");
     els.dingTestResult.className = `tag ${data.success ? "tag-primary" : "tag-danger"}`;
@@ -736,40 +736,50 @@
   }
 
   function enableDingEdit() {
-    els.dingAppKey.readOnly = false;
-    els.dingAppSecret.readOnly = false;
-    els.dingAppKey.focus();
-    byId("editDingBtn").style.display = "none";
-    byId("dingSaveRow").style.display = "";
-    byId("dingSavedTag").style.display = "none";
+    setCredentialEditor("ding", true);
+  }
+
+  function setCredentialEditor(kind, editing) {
+    const ding = kind === "ding";
+    byId(ding ? "dingCredentialFields" : "easyaiCredentialFields").hidden = !editing;
+    byId(ding ? "editDingBtn" : "editEasyAIBtn").hidden = editing;
+    const fields = ding ? [els.dingAppKey, els.dingAppSecret] : [els.easyaiAdminUsername, els.easyaiAdminPassword];
+    fields.forEach(field => { field.value = ""; field.readOnly = !editing; });
+    const configured = ding ? state.config.dingtalk_configured : state.config.easyai_admin_credentials_configured;
+    const tag = byId(ding ? "dingSavedTag" : "easyaiAdminCredentialsStatus");
+    tag.textContent = configured ? "已配置 · ********" : "未配置";
+    tag.className = "tag";
+    if (ding) byId("dingSaveRow").style.display = "flex";
+    if (editing) fields[0].focus();
+  }
+
+  async function saveProjectSchedule() {
+    const hours = Number(byId("projectSyncHours").value);
+    if (!Number.isInteger(hours) || hours < 1 || hours > 168) return toast("请输入 1–168 的整数小时");
+    const button = byId("saveProjectScheduleBtn");
+    button.disabled = true;
+    try {
+      await fetchJson("api/project-sync/schedule", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({enabled:byId("projectSyncEnabled").checked, intervalHours:hours})});
+      toast("同步设置已保存并生效");
+    } catch (error) { toast(error.message || "同步设置保存失败"); }
+    finally { button.disabled = false; }
   }
 
   async function saveDingConfig() {
     const appKey = els.dingAppKey.value.trim();
     const appSecret = els.dingAppSecret.value.trim();
-    if (!appKey || !appSecret) return toast("请填写完整的钉钉 AppKey 和 AppSecret");
+    if ((!appKey || !appSecret) && !state.config.dingtalk_configured) return toast("请填写完整的钉钉 AppKey 和 AppSecret");
     const response = await fetch("api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ding_appKey: appKey, ding_appSecret: appSecret }) });
     if (!response.ok) return toast("钉钉配置保存失败");
-    // 更新本地 state
-    state.config.ding_appKey = appKey;
-    state.config.ding_appSecret = appSecret;
-    // 恢复只读状态
-    els.dingAppKey.readOnly = true;
-    els.dingAppSecret.readOnly = true;
-    byId("editDingBtn").style.display = "";
-    byId("dingSaveRow").style.display = "none";
-    byId("dingSavedTag").style.display = "inline-flex";
+    state.config = await fetchJson("api/config");
+    setCredentialEditor("ding", false);
     toast("钉钉配置已保存");
   }
 
   async function saveConfig() {
-    const currentDingAppKey = els.dingAppKey.readOnly ? (state.config.ding_appKey || "") : els.dingAppKey.value.trim();
-    const currentDingAppSecret = els.dingAppSecret.readOnly ? (state.config.ding_appSecret || "") : els.dingAppSecret.value.trim();
     const body = {
       project_title: els.projectTitle.value.trim() || "Claw 项目排期看板",
       default_assign_days: els.defaultAssignDays.value || "1",
-      ding_appKey: currentDingAppKey,
-      ding_appSecret: currentDingAppSecret,
       theme_primary: els.themePrimary.value,
       trip_upcoming_color: els.tripUpcomingColor.value,
       trip_active_color: els.tripActiveColor.value,
@@ -794,7 +804,7 @@
   async function saveEasyAICredentials() {
     const username = els.easyaiAdminUsername.value.trim();
     const password = els.easyaiAdminPassword.value;
-    if (!username || !password) return toast("请填写管理员账号和密码");
+    if ((!username || !password) && !state.config.easyai_admin_credentials_configured) return toast("请填写管理员账号和密码");
     const body = { easyai_admin_username: username, easyai_admin_password: password };
     try {
       const response = await fetch("api/config", {
@@ -804,7 +814,7 @@
       });
       if (!response.ok) throw new Error("保存失败");
       await loadAll();
-      els.easyaiAdminPassword.value = "";
+      setCredentialEditor("easyai", false);
       toast("管理员账号已保存");
     } catch (error) {
       toast(error.message || "管理员账号保存失败");
@@ -826,8 +836,8 @@
 
   async function syncLeaveNow() {
     toast("正在同步请假状态...");
-    const appKey = state.config.ding_appKey || "";
-    const appSecret = state.config.ding_appSecret || "";
+    const appKey = "";
+    const appSecret = "";
     const data = await fetchJson("api/leave/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -861,9 +871,9 @@
   }
 
   async function fetchDingUsers() {
-    const appKey = state.config.ding_appKey || "";
-    const appSecret = state.config.ding_appSecret || "";
-    if (!appKey || !appSecret) return toast("请先在系统配置里填写钉钉 AppKey 和 AppSecret");
+    const appKey = "";
+    const appSecret = "";
+    if (!state.config.dingtalk_configured) return toast("请先在系统配置里填写钉钉 AppKey 和 AppSecret");
     els.syncPersonsStatus.textContent = "正在获取...";
     els.syncPersonsStatus.className = "sync-status";
     const data = await fetchJson("api/dingtalk/users", {

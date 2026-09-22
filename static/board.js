@@ -217,19 +217,21 @@
       if (!el || this.state.orgLoading) return;
       this.state.orgLoading = true;
       el.className = "organization-sync";
-      el.textContent = "wowidea · 正在核对…";
+      el.textContent = "↻ 核对中";
       try {
         const data = await fetchJson("api/project-sync/overview");
         const same = data.state === "consistent";
         el.className = `organization-sync ${same ? "is-consistent" : "is-pending"}`;
         const next = data.schedulerEnabled
-          ? (data.nextSyncAt ? `下次同步 ${new Date(data.nextSyncAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "本轮同步中")
-          : "自动同步未开启 · 下次未安排";
-        el.textContent = `${same ? "✓" : "○"} wowidea · ${data.message} · ${next}`;
-        el.title = `核对时间：${new Date(data.checkedAt).toLocaleString("zh-CN")}；核对项目组织名称、所属执行项目组和当前有效成员。每分钟重新核对。`;
+          ? (data.nextSyncAt ? `下次 ${new Date(data.nextSyncAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}` : "↻ 同步中")
+          : "⏸";
+        const labels = {consistent:"组织一致", different:"待同步", syncing:"同步中", error:"核对失败", unavailable:"未启用", empty:"暂无项目"};
+        el.textContent = `${same ? "✓" : "○"} ${labels[data.state] || "状态未知"} · ${next}`;
+        el.title = `wowidea：${data.message}。${data.schedulerEnabled ? "自动同步已开启" : "自动同步关闭，下次未安排；可在后台系统配置中开启"}。核对时间：${new Date(data.checkedAt).toLocaleString("zh-CN")}。每分钟核对组织名称、父组织和成员。`;
       } catch {
         el.className = "organization-sync is-pending";
-        el.textContent = "○ wowidea · 核对失败 · 下次同步时间未知";
+        el.textContent = "○ 核对失败";
+        el.title = "无法核对 wowidea 组织信息或读取下次同步时间，请在后台测试连接";
       } finally {
         this.state.orgLoading = false;
       }
