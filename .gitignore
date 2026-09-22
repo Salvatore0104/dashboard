@@ -47,3 +47,7 @@ STARTUP_COMPLETE.md
 # Logs
 *.log
 *.tar
+
+# Local browser acceptance artifacts
+.playwright-cli/
+output/playwright/

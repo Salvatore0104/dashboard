@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+  <script src="access.js"></script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
@@ -69,8 +70,10 @@
   <script>
     document.querySelectorAll("[data-icon]").forEach((el) => el.innerHTML = Icons.svg(el.dataset.icon));
     document.querySelectorAll("[data-nav-icon]").forEach((el) => el.insertAdjacentHTML("afterbegin", Icons.svg(el.dataset.navIcon)));
-    window.boardApp = new BoardApp({ rootId: "boardRoot", readonly: false });
-    window.boardApp.init();
+    DashboardAccess.start(() => {
+      window.boardApp = new BoardApp({ rootId: "boardRoot", readonly: false });
+      window.boardApp.init();
+    });
   </script>
 </body>
 </html>

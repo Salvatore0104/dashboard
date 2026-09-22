@@ -13,6 +13,12 @@ from project_sync import EasyAIClient, ProjectSyncCoordinator, _batch_result, en
 
 class ProjectSyncUnitTests(unittest.TestCase):
     def setUp(self):
+        sync_mode = patch('project_sync.SYNC_MODE', 'mock')
+        sync_mode.start()
+        self.addCleanup(sync_mode.stop)
+        network = patch('requests.sessions.Session.request', side_effect=AssertionError('Unit tests must not use live services'))
+        network.start()
+        self.addCleanup(network.stop)
         self.conn = sqlite3.connect(':memory:')
         self.conn.row_factory = sqlite3.Row
         ensure_tables(self.conn)
@@ -343,7 +349,7 @@ class ProjectSyncUnitTests(unittest.TestCase):
         js = Path(__file__).with_name("static").joinpath("admin.js").read_text(encoding="utf-8")
         self.assertIn('Content-Disposition"] = \'attachment; filename="dashboard-export.json"\'', app_source)
         self.assertIn('byId("exportJsonBtn").addEventListener("click", downloadJsonExport)', js)
-        self.assertIn('frame.src = "api/export"', js)
+        self.assertIn("DashboardAccess.download('api/export', 'dashboard.json')", js)
         self.assertIn('JSON 导出已开始下载', js)
         self.assertNotIn('URL.revokeObjectURL(url)', js)
         self.assertNotIn('location.href = "api/export"', js)

@@ -1,5 +1,8 @@
 (function () {
   const KEY = "dashboard_theme_config";
+  const FIELDS = new Set(['theme_primary', 'primary_color', 'trip_upcoming_color',
+    'trip_active_color', 'leave_active_color', 'leave_upcoming_color', 'conflict_color']);
+  const displayOnly = config => Object.fromEntries(Object.entries(config || {}).filter(([key]) => FIELDS.has(key)));
 
   function shadeColor(hex, percent) {
     const clean = String(hex || "#3157d5").replace("#", "");
@@ -45,7 +48,9 @@
 
   function load() {
     try {
-      return JSON.parse(localStorage.getItem(KEY) || "null");
+      const clean = displayOnly(JSON.parse(localStorage.getItem(KEY) || "null"));
+      localStorage.setItem(KEY, JSON.stringify(clean));
+      return clean;
     } catch {
       return null;
     }
@@ -54,7 +59,7 @@
   function save(config) {
     if (!config || typeof config !== "object") return;
     try {
-      localStorage.setItem(KEY, JSON.stringify(config));
+      localStorage.setItem(KEY, JSON.stringify(displayOnly(config)));
     } catch {}
     apply(config);
   }

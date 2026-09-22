@@ -1,4 +1,5 @@
 (function () {
+  const fetch = (...args) => window.DashboardAccess ? window.DashboardAccess.fetch(...args) : window.fetch(...args);
   const DAY_MS = 86400000;
 
   // 中国法定节假日（2025-2030）
@@ -188,7 +189,9 @@
 
     async loadData() {
       try {
-        const [projects, persons, assignments, config] = await Promise.all([
+        const [projects, persons, assignments, config] = this.state.readonly
+          ? await fetchJson('api/tv/data').then(data => [data.projects, data.persons, data.assignments, data.config])
+          : await Promise.all([
           fetchJson("api/projects"),
           fetchJson("api/persons"),
           fetchJson("api/assignments"),
@@ -284,16 +287,12 @@
 
     connectSSE() {
       this.disconnectSSE();
-      const source = new EventSource("api/events");
+      const source = new EventSource("api/tv/events");
       this.state.sse = source;
-      const reload = () => this.queueLoad();
-      source.addEventListener("projects_changed", reload);
-      source.addEventListener("persons_changed", () => {
+      source.addEventListener("invalidate", () => {
         this.queueLoad();
-        this.loadSyncStatus();
+        if (!this.state.readonly) this.loadSyncStatus();
       });
-      source.addEventListener("assignments_changed", reload);
-      source.addEventListener("config_changed", reload);
       source.onopen = () => {
         this.state.sseDelay = 5000;
       };

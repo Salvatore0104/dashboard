@@ -38,6 +38,8 @@ docker-compose.yml
 # Output files
 *.tar
 *.tar.gz
+.playwright-cli/
+output/playwright/
 
 # README
 README.md

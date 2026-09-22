@@ -50,7 +50,7 @@
   <script>
     document.querySelectorAll("[data-icon]").forEach((el) => el.innerHTML = Icons.svg(el.dataset.icon));
     document.querySelectorAll("[data-nav-icon]").forEach((el) => el.insertAdjacentHTML("afterbegin", Icons.svg(el.dataset.navIcon)));
-    fetch("api/config").then((r) => r.json()).then((config) => {
+    fetch("api/tv/data").then((r) => r.json()).then(({config}) => {
       window.ThemeStore?.save(config);
       const title = config.project_title || "Claw 项目排期看板";
       document.title = title;

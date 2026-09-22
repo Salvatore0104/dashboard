@@ -5,8 +5,10 @@ import time
 import queue
 import threading
 import uuid
-from flask import Flask, jsonify, request, send_from_directory, Response, stream_with_context, make_response
-from flask_cors import CORS
+import hashlib
+import hmac
+from flask import Flask, jsonify, request, send_from_directory, Response, stream_with_context, make_response, g
+from access_control import install_access_control
 import requests
 from dotenv import load_dotenv
 
@@ -19,7 +21,7 @@ from project_sync import ensure_tables, ensure_binding, update_project_binding_n
 from project_sync import organization_consistency
 
 app = Flask(__name__, static_folder='static', static_url_path='')
-CORS(app)
+install_access_control(app)
 
 
 PORT = int(os.getenv('PORT', 5000))
@@ -129,7 +131,7 @@ def init_db():
 # ==================== SSE 广播 ====================
 
 def broadcast(event_type, data):
-    msg = f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    msg = 'event: invalidate\ndata: {}\n\n'
     with sse_lock:
         dead = []
         for q in sse_clients:
@@ -140,7 +142,7 @@ def broadcast(event_type, data):
         for q in dead:
             sse_clients.remove(q)
 
-@app.route('/api/events')
+@app.route('/api/tv/events')
 def sse_stream():
     def generate():
         q = queue.Queue()
@@ -172,6 +174,54 @@ def sse_stream():
     )
 
 # ==================== 项目 API ====================
+
+TV_CONFIG_FIELDS = frozenset({
+    'project_title', 'theme_primary', 'primary_color', 'pre_person_color',
+    'post_person_color', 'trip_upcoming_color', 'trip_active_color',
+    'leave_active_color', 'leave_upcoming_color', 'conflict_color', 'conflict_opacity',
+})
+_tv_id_key = os.urandom(32)
+
+
+def tv_person_id(value):
+    # Some historic local person IDs are also external DingTalk IDs.
+    return hmac.new(_tv_id_key, str(value).encode('utf-8'), hashlib.sha256).hexdigest()
+
+
+@app.get('/api/tv/data')
+def tv_data():
+    conn = get_db()
+    try:
+        persons = [dict(row) for row in conn.execute('''SELECT id, name, group_type,
+            avatar, department, selected, sort_order, leave_status, leave_start,
+            leave_end, leave_type FROM persons WHERE selected != 0
+            ORDER BY group_type, sort_order, name''')]
+        visible = {str(person['id']) for person in persons}
+        projects = [dict(row) for row in conn.execute('''SELECT id, name, start_date,
+            end_date, color, business_trip, business_trip_start, business_trip_end,
+            business_trip_persons FROM projects ORDER BY start_date''')]
+        for project in projects:
+            try:
+                members = json.loads(project['business_trip_persons'] or '[]')
+            except (ValueError, TypeError):
+                members = []
+            project['business_trip_persons'] = json.dumps([
+                tv_person_id(member) for member in members if str(member) in visible
+            ])
+        assignments = [dict(row) for row in conn.execute('''SELECT a.id, a.project_id,
+            a.person_id, a.start_date, a.end_date, p.name AS person_name, p.group_type,
+            pr.name AS project_name, pr.color AS project_color FROM assignments a
+            JOIN persons p ON p.id=a.person_id JOIN projects pr ON pr.id=a.project_id
+            WHERE p.selected != 0 ORDER BY a.start_date''')]
+        config = {row['key']: row['value'] for row in conn.execute('SELECT key, value FROM config')
+                  if row['key'] in TV_CONFIG_FIELDS or row['key'].startswith('dept_color_')}
+        for person in persons:
+            person['id'] = tv_person_id(person['id'])
+        for assignment in assignments:
+            assignment['person_id'] = tv_person_id(assignment['person_id'])
+        return jsonify(projects=projects, persons=persons, assignments=assignments, config=config)
+    finally:
+        conn.close()
 
 @app.route('/api/projects', methods=['GET'])
 def get_projects():
@@ -307,7 +357,7 @@ def project_sync_run(pid):
     def run_one():
         conn = get_db()
         try:
-            result = sync_project(conn, pid, data.get('trigger', 'manual'), data.get('operatorId', 'local-admin'))
+            result = sync_project(conn, pid, data.get('trigger', 'manual'), g.visitor['id'])
             conn.commit()
             broadcast('projects_changed', {'action': 'sync', 'id': pid})
             return result
@@ -370,7 +420,7 @@ def project_sync_global_run():
     def run_one():
         conn = get_db()
         try:
-            result = sync_all_projects(conn, data.get('operatorId', 'local-admin'), project_sync_coordinator)
+            result = sync_all_projects(conn, g.visitor['id'], project_sync_coordinator)
             conn.commit()
             broadcast('projects_changed', {'action': 'global_sync'})
             return result
@@ -402,7 +452,7 @@ def refresh_project_sync_identities():
     try:
         client = EasyAIClient(load_easyai_runtime_config(conn))
         users = client.list_users()
-        matches = refresh_identity_inventory(conn, users, (request.json or {}).get('operatorId', 'local-admin'))
+        matches = refresh_identity_inventory(conn, users, g.visitor['id'])
         conn.commit()
         return jsonify({'success': True, 'total': len(matches), 'matched': sum(item['status'] in {'auto_matched', 'confirmed'} for item in matches), 'candidate': sum(item['status'] == 'candidate' for item in matches), 'unmatched': sum(item['status'] == 'unmatched' for item in matches), 'conflict': sum(item['status'] == 'conflict' for item in matches)})
     except Exception as exc:
@@ -432,7 +482,7 @@ def preview_project_sync_identities():
 def bind_all_project_sync_identities():
     conn = get_db()
     try:
-        operator_id = (request.json or {}).get('operatorId', 'local-admin')
+        operator_id = g.visitor['id']
         users = EasyAIClient(load_easyai_runtime_config(conn)).list_users()
         before = {str(row['dashboard_user_id']) for row in conn.execute("SELECT dashboard_user_id FROM external_user_identity WHERE easyai_user_id<>'' AND match_status IN ('auto_matched','confirmed')").fetchall()}
         matches = refresh_identity_inventory(conn, users, operator_id)
@@ -462,8 +512,8 @@ def confirm_project_sync_identity(user_id):
     if duplicate:
         conn.close()
         return jsonify({'success': False, 'message': '该平台用户已绑定其他钉钉身份，已拒绝覆盖'}), 409
-    conn.execute('''UPDATE external_user_identity SET easyai_user_id=?, match_status='confirmed', match_source='manual', confirmed_by=?, confirmed_at=?, updated_at=datetime('now') WHERE dashboard_user_id=?''', (easyai_user_id, data.get('operatorId', 'local-admin'), int(time.time() * 1000), user_id))
-    conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, affected_user_ids, result, created_at) VALUES (?, ?, '', 'identity_confirm', ?, 'succeeded', ?)", (str(uuid.uuid4()), data.get('operatorId', 'local-admin'), json.dumps([user_id]), int(time.time() * 1000)))
+    conn.execute('''UPDATE external_user_identity SET easyai_user_id=?, match_status='confirmed', match_source='manual', confirmed_by=?, confirmed_at=?, updated_at=datetime('now') WHERE dashboard_user_id=?''', (easyai_user_id, g.visitor['id'], int(time.time() * 1000), user_id))
+    conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, affected_user_ids, result, created_at) VALUES (?, ?, '', 'identity_confirm', ?, 'succeeded', ?)", (str(uuid.uuid4()), g.visitor['id'], json.dumps([user_id]), int(time.time() * 1000)))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -477,8 +527,8 @@ def unbind_project_sync_identity(user_id):
     if not current:
         conn.close()
         return jsonify({'success': False, 'message': '找不到身份记录'}), 404
-    conn.execute("UPDATE external_user_identity SET easyai_user_id='', match_status='unmatched', match_source='manual_unbind', match_score=0, confirmed_by=?, confirmed_at=?, updated_at=datetime('now') WHERE dashboard_user_id=?", (data.get('operatorId', 'local-admin'), int(time.time() * 1000), user_id))
-    conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, affected_user_ids, result, created_at) VALUES (?, ?, '', 'identity_unbind', ?, 'succeeded', ?)", (str(uuid.uuid4()), data.get('operatorId', 'local-admin'), json.dumps([user_id]), int(time.time() * 1000)))
+    conn.execute("UPDATE external_user_identity SET easyai_user_id='', match_status='unmatched', match_source='manual_unbind', match_score=0, confirmed_by=?, confirmed_at=?, updated_at=datetime('now') WHERE dashboard_user_id=?", (g.visitor['id'], int(time.time() * 1000), user_id))
+    conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, affected_user_ids, result, created_at) VALUES (?, ?, '', 'identity_unbind', ?, 'succeeded', ?)", (str(uuid.uuid4()), g.visitor['id'], json.dumps([user_id]), int(time.time() * 1000)))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -1680,7 +1730,7 @@ def sync_assignment_project(project_id, trigger):
     def run_one():
         conn = get_db()
         try:
-            result = sync_project(conn, str(project_id), trigger, 'assignment')
+            result = sync_project(conn, str(project_id), trigger, g.visitor['id'])
             conn.commit()
             return result
         except Exception as exc:
@@ -1695,7 +1745,7 @@ def sync_deleted_project(project_id):
     conn = get_db()
     try:
         def run_cleanup():
-            return cleanup_deleted_binding(conn, str(project_id), 'project-delete')
+            return cleanup_deleted_binding(conn, str(project_id), g.visitor['id'])
         result = project_sync_coordinator.run(str(project_id), run_cleanup)
         conn.commit()
         return {'success': result.get('status') in {'deleted', 'already_deleted', 'retained'}, 'projectId': str(project_id), 'cleanup': result, 'retryable': result.get('status') == 'failed'}
@@ -1789,7 +1839,7 @@ def static_files(path):
 
 @app.route('/health')
 def health():
-    return jsonify({'status': 'ok', 'db': DB_PATH})
+    return jsonify({'status': 'ok'})
 
 # ==================== 启动 ====================
 

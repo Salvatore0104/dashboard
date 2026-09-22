@@ -1,4 +1,5 @@
 (function () {
+  const fetch = (...args) => window.DashboardAccess.fetch(...args);
   const CANDY_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4", "#6366f1"];
   // 与 board.js 保持一致的部门列表
   const DEPTS = [
@@ -88,7 +89,7 @@
     byId("configBtn").addEventListener("click", openConfigModal);
     byId("syncLeaveBtn").addEventListener("click", syncLeaveNow);
     byId("exportJsonBtn").addEventListener("click", downloadJsonExport);
-    byId("exportCsvBtn").addEventListener("click", () => location.href = "api/export/assignments/csv");
+    byId("exportCsvBtn").addEventListener("click", () => DashboardAccess.download("api/export/assignments/csv", "assignments.csv").catch(error => toast(error.message)));
     byId("saveProjectBtn").addEventListener("click", saveProject);
     byId("saveBusinessTripBtn").addEventListener("click", saveBusinessTrip);
     byId("fetchDingUsersBtn").addEventListener("click", fetchDingUsers);
@@ -155,7 +156,7 @@
       }).join("");
       els.identityBody.querySelectorAll("[data-unbind-identity]").forEach((button) => button.addEventListener("click", async () => {
         if (!confirm("解除该身份绑定？不会删除 wowidea 用户，也不会修改其组织。")) return;
-        const result = await fetchJson(`api/project-sync/identities/${encodeURIComponent(button.dataset.unbindIdentity)}/unbind`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) });
+        const result = await fetchJson(`api/project-sync/identities/${encodeURIComponent(button.dataset.unbindIdentity)}/unbind`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
         toast(result.success ? "身份绑定已解除" : (result.message || "解除失败"));
         await loadIdentities();
       }));
@@ -165,7 +166,7 @@
   }
 
   async function refreshIdentities() {
-    const result = await fetchJson("api/project-sync/identities/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) }).catch((error) => ({ success: false, message: error.message }));
+    const result = await fetchJson("api/project-sync/identities/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }).catch((error) => ({ success: false, message: error.message }));
     if (!result.success) return toast(result.message || "身份盘点失败");
     toast(`身份盘点完成：已绑定 ${result.matched}，候选 ${result.candidate}，未匹配 ${result.unmatched}，冲突 ${result.conflict}`);
     await loadIdentities();
@@ -176,7 +177,7 @@
     const preview = await fetchJson("api/project-sync/identities/preview", { method: "POST" }).catch((error) => ({ success: false, message: error.message }));
     if (!preview.success) return toast(preview.message || "无法生成身份绑定预览");
     openActionConfirm("确认批量身份绑定", `全量身份绑定预览\n\n共 ${preview.total} 人\n新增可绑定 ${preview.bindable} 人\n已有绑定 ${preview.existingBound ?? (preview.matched - preview.bindable)} 人\n昵称候选 ${preview.candidate} 人\n冲突 ${preview.conflict} 人\n未匹配 ${preview.unmatched} 人\n\n确认后只绑定唯一稳定 ID 匹配，不按昵称误绑，不修改 wowidea 原组织。`, async () => {
-      const result = await fetchJson("api/project-sync/identities/bind-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) }).catch((error) => ({ success: false, message: error.message }));
+      const result = await fetchJson("api/project-sync/identities/bind-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }).catch((error) => ({ success: false, message: error.message }));
       if (!result.success) return toast(result.message || "批量绑定失败");
       toast(`批量绑定完成：新增绑定 ${result.newBound ?? result.bound}，已有绑定 ${result.existingBound ?? 0}，冲突 ${result.conflict}，未匹配 ${result.unmatched}`);
       await loadIdentities();
@@ -260,7 +261,7 @@
       if (!preview.success) return toast(preview.message || "无法生成同步预览");
       const confirmed = confirm(`同步项目“${project.name}”？\n\n新增成员 ${preview.added || 0} 人，已在项目组织 ${preview.existing || 0} 人，未匹配 ${preview.unmatched || 0} 人，身份冲突 ${preview.conflict || 0} 人。\n\n只绑定已有平台账号并追加组织关系，不创建账号、不修改登录名、密码、历史数据或已有组织。\n\n本地默认使用 Mock 模式；真实 API 写入必须显式配置绑定接口。`);
       if (!confirmed) return;
-      const result = await fetchJson(`api/project-sync/${encodeURIComponent(projectId)}/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trigger: "manual", operatorId: "local-admin" }) });
+      const result = await fetchJson(`api/project-sync/${encodeURIComponent(projectId)}/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trigger: "manual" }) });
       toast(result.success ? (result.simulated ? `模拟同步完成：未写入 wowidea.top；新增 ${result.added || 0} 人，已存在 ${result.existing || 0} 人，未匹配 ${result.unmatched || 0} 人` : `同步完成：新增 ${result.added || 0} 人，已存在 ${result.existing || 0} 人，未匹配 ${result.unmatched || 0} 人`) : (result.message || "同步失败"));
       await loadProjectSyncStatuses();
     } catch (error) {
@@ -312,7 +313,7 @@
     openActionConfirm("确认执行全局同步", `确认执行全局同步？\n\n新增组织 ${totals.create_org || 0}，新增成员 ${totals.added || 0}，将移除成员 ${totals.removed || 0}，待处理清理 ${totals.pending_delete || 0}。\n\n仅清理成员关系，不删除平台组织。新组织初始化 5000 积分，扣费策略为组织优先。`, async () => {
       els.globalSyncRunBtn.disabled = true;
       try {
-        const result = await fetchJson("api/project-sync/global/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) });
+        const result = await fetchJson("api/project-sync/global/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
         if (!result.success) throw new Error(result.message || "全局同步失败");
         const t = result.totals || {};
         toast(`全局同步完成：新增成员 ${t.added || 0}，移除成员 ${t.removed || 0}，失败项目 ${t.failed || 0}，待处理清理 ${t.pending_delete || 0}`);
@@ -1084,11 +1085,7 @@
 
   async function downloadJsonExport() {
     try {
-      const frame = document.createElement("iframe");
-      frame.hidden = true;
-      frame.src = "api/export";
-      document.body.appendChild(frame);
-      window.setTimeout(() => frame.remove(), 60000);
+      await DashboardAccess.download('api/export', 'dashboard.json');
       toast("JSON 导出已开始下载");
     } catch (error) { toast(error.message || "JSON 导出失败"); }
   }

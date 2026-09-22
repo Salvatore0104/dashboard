@@ -90,6 +90,16 @@ class FakeAdapter:
 
 class LifecycleAcceptanceTests(unittest.TestCase):
     def setUp(self):
+        from flask.testing import FlaskClient
+        class AuthenticatedClient(FlaskClient):
+            def open(self, *args, **kwargs):
+                kwargs.setdefault('headers', {})['Authorization'] = 'Bearer lifecycle-test'
+                return super().open(*args, **kwargs)
+        for patcher in [patch.object(dashboard_app.app, 'test_client_class', AuthenticatedClient),
+                        patch('access_control.verify_identity', return_value={'id': 'test-operator', 'roles': ['operator']}),
+                        patch('requests.sessions.Session.request', side_effect=AssertionError('Acceptance tests must not use live services'))]:
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.db_file = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
         self.db_file.close()
         self.fake = FakeAdapter()
@@ -269,7 +279,10 @@ class LifecycleAcceptanceTests(unittest.TestCase):
         # The deletion helper must only touch the requested project's binding.
         self.conn.execute("DELETE FROM projects WHERE id='p-a'")
         self.conn.commit()
-        result = dashboard_app.sync_deleted_project("p-a")
+        with dashboard_app.app.test_request_context('/api/projects/p-a'):
+            from flask import g
+            g.visitor = {'id': 'test-operator'}
+            result = dashboard_app.sync_deleted_project("p-a")
         self.assertTrue(result["success"], result)
         self.assertFalse(any(call[0] == 'delete_org' for call in self.fake.calls))
         self.assertNotIn(("delete_org", "org-p-b", "parent", "p-b"), self.fake.calls)
