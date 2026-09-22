@@ -260,14 +260,14 @@ class LifecycleAcceptanceTests(unittest.TestCase):
         self.conn.commit()
         result = dashboard_app.sync_deleted_project("p-a")
         self.assertTrue(result["success"], result)
-        self.assertIn(("delete_org", "org-p-a", "parent", "p-a"), self.fake.calls)
+        self.assertFalse(any(call[0] == 'delete_org' for call in self.fake.calls))
         self.assertNotIn(("delete_org", "org-p-b", "parent", "p-b"), self.fake.calls)
         self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_binding WHERE project_id='p-b'").fetchone()[0], "active")
-        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_binding WHERE project_id='p-a'").fetchone()[0], "deleted")
+        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_binding WHERE project_id='p-a'").fetchone()[0], "retained")
         self.conn.commit()
         followup = sync_all_projects(self.conn, "test")
         self.assertEqual(followup["totals"]["pending_delete"], 0)
-        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_binding WHERE project_id='p-a'").fetchone()[0], "deleted")
+        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_binding WHERE project_id='p-a'").fetchone()[0], "retained")
 
     def test_member_removal_requires_owned_organization_validation_first(self):
         self.add_project("p-a")

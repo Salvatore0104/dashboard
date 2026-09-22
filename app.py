@@ -1697,7 +1697,7 @@ def sync_deleted_project(project_id):
             return cleanup_deleted_binding(conn, str(project_id), 'project-delete')
         result = project_sync_coordinator.run(str(project_id), run_cleanup)
         conn.commit()
-        return {'success': result.get('status') in {'deleted', 'already_deleted'}, 'projectId': str(project_id), 'cleanup': result, 'retryable': result.get('status') == 'failed'}
+        return {'success': result.get('status') in {'deleted', 'already_deleted', 'retained'}, 'projectId': str(project_id), 'cleanup': result, 'retryable': result.get('status') == 'failed'}
     except Exception as exc:
         conn.commit()
         return {'success': False, 'projectId': str(project_id), 'error': redact_error(exc), 'retryable': True}

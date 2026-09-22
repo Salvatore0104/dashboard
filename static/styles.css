@@ -1474,6 +1474,9 @@ td.actions {
   grid-column: 1 / -1;
 }
 
+.project-archive { border-top: 1px solid var(--line); margin-top: 14px; }
+.project-archive summary { cursor: pointer; padding: 14px 16px; color: var(--muted); font-weight: 600; }
+
 .settings-basics {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(100px, 1fr) auto;

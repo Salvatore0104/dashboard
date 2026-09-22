@@ -37,6 +37,14 @@
     installIcons();
     bind();
     loadAll();
+    let renderedDay = todayStr();
+    setInterval(() => {
+      if (renderedDay !== todayStr()) {
+        renderedDay = todayStr();
+        byId('archivedProjects').open = false;
+        renderProjects();
+      }
+    }, 30000);
   }
 
   function cache() {
@@ -193,15 +201,17 @@
   }
 
   function renderProjects() {
-    els.projectCount.textContent = `${state.projects.length} 个`;
-    if (!state.projects.length) {
-      els.projectBody.innerHTML = `<tr><td colspan="8" class="table-empty">暂无项目</td></tr>`;
-      return;
-    }
-    els.projectBody.innerHTML = state.projects.map((p) => {
+    const today = todayStr();
+    const active = state.projects.filter(p => !p.end_date || p.end_date >= today);
+    const archived = state.projects.filter(p => p.end_date && p.end_date < today);
+    if (archived.length > (state.archivedCount || 0)) byId('archivedProjects').open = false;
+    state.archivedCount = archived.length;
+    els.projectCount.textContent = `${active.length} 个`;
+    byId('archiveCount').textContent = `${archived.length} 个`;
+    const renderRows = projects => projects.map((p) => {
       const tripPersons = parseJsonArray(p.business_trip_persons).map(personName).join("、") || "-";
       return `<tr>
-        <td><span class="color-swatch" style="background:${esc(p.color || CANDY_COLORS[0])}"></span><strong>${esc(p.name)}</strong></td>
+        <td><span class="color-swatch" style="background:${esc(p.color || CANDY_COLORS[0])}"></span><strong>${esc(p.name)}</strong> <span class="tag">${p.end_date && p.end_date < today ? '已归档' : p.start_date > today ? '待执行' : '执行中'}</span></td>
         <td>${esc(p.start_date)}</td>
         <td>${esc(p.end_date)}</td>
         <td>${p.business_trip == 1 ? '<span class="tag tag-trip">已启用</span>' : '<span class="tag">未启用</span>'}</td>
@@ -215,15 +225,19 @@
         </td>
       </tr>`;
     }).join("");
-    els.projectBody.querySelectorAll("[data-edit-project]").forEach((btn) => btn.addEventListener("click", () => openProjectModal(btn.dataset.editProject)));
-    els.projectBody.querySelectorAll("[data-trip-project]").forEach((btn) => btn.addEventListener("click", () => openBusinessTripModal(btn.dataset.tripProject)));
-    els.projectBody.querySelectorAll("[data-delete-project]").forEach((btn) => btn.addEventListener("click", () => deleteProject(btn.dataset.deleteProject)));
+    els.projectBody.innerHTML = renderRows(active) || '<tr><td colspan="8" class="table-empty">暂无待执行或执行中的项目</td></tr>';
+    byId('archivedProjectBody').innerHTML = renderRows(archived) || '<tr><td colspan="8" class="table-empty">暂无归档项目</td></tr>';
+    for (const body of [els.projectBody, byId('archivedProjectBody')]) {
+      body.querySelectorAll("[data-edit-project]").forEach((btn) => btn.addEventListener("click", () => openProjectModal(btn.dataset.editProject)));
+      body.querySelectorAll("[data-trip-project]").forEach((btn) => btn.addEventListener("click", () => openBusinessTripModal(btn.dataset.tripProject)));
+      body.querySelectorAll("[data-delete-project]").forEach((btn) => btn.addEventListener("click", () => deleteProject(btn.dataset.deleteProject)));
+    }
     loadProjectSyncStatuses();
   }
 
   async function loadProjectSyncStatuses() {
     await Promise.all(state.projects.map(async (project) => {
-      const tag = els.projectBody.querySelector(`[data-sync-status="${CSS.escape(String(project.id))}"]`);
+      const tag = document.querySelector(`[data-sync-status="${CSS.escape(String(project.id))}"]`);
       if (!tag) return;
       try {
         const data = await fetchJson(`api/project-sync/${encodeURIComponent(project.id)}/status`);
@@ -255,7 +269,7 @@
   }
 
   function openGlobalSyncModal() {
-    els.globalSyncSummary.textContent = "点击“生成预览”读取当前项目组织和成员差异。离开成员将从对应组织移除；符合归属和安全条件的已删除项目组织将执行清理。";
+    els.globalSyncSummary.textContent = "点击“生成预览”读取当前项目组织和成员差异。离开或到期成员将移除，平台组织始终保留；删除组织请前往 wowidea 平台。";
     els.globalSyncBody.innerHTML = `<tr><td colspan="5" class="table-empty">尚未生成预览</td></tr>`;
     els.globalSyncRunBtn.disabled = true;
     openModal("globalSyncModal");
@@ -295,7 +309,7 @@
   async function runGlobalSync() {
     if (!state.globalSyncPreview) return previewGlobalSync();
     const totals = state.globalSyncPreview.totals || {};
-    openActionConfirm("确认执行全局同步", `确认执行全局同步？\n\n新增组织 ${totals.create_org || 0}，新增成员 ${totals.added || 0}，将移除成员 ${totals.removed || 0}，待处理清理 ${totals.pending_delete || 0}。\n\n系统会按归属和安全校验执行成员移除及符合条件的组织清理。`, async () => {
+    openActionConfirm("确认执行全局同步", `确认执行全局同步？\n\n新增组织 ${totals.create_org || 0}，新增成员 ${totals.added || 0}，将移除成员 ${totals.removed || 0}，待处理清理 ${totals.pending_delete || 0}。\n\n仅清理成员关系，不删除平台组织。新组织初始化 5000 积分，扣费策略为组织优先。`, async () => {
       els.globalSyncRunBtn.disabled = true;
       try {
         const result = await fetchJson("api/project-sync/global/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) });
@@ -576,14 +590,14 @@
 
   async function deleteProject(id) {
     const project = state.projects.find((item) => String(item.id) === String(id));
-    openActionConfirm("确认删除项目", `将删除项目“${project?.name || id}”及其本地分配。\n\n系统会尝试清理对应的 Dashboard 组织；若组织清理失败，本地删除仍会完成，但会明确标记待重试。`, async () => {
+    openActionConfirm("确认删除项目", `将删除项目“${project?.name || id}”及其本地分配。\n\n仅清空该项目管理的组织成员，保留平台组织及余额。组织只能在 wowidea 平台删除。`, async () => {
       try {
         const result = await fetchJson(`api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
         if (!result.success) throw new Error(result.message || "项目删除失败");
         await loadAll();
         const sync = result.sync || {};
         if (sync.success === false || sync.retryable) return toast(`项目本地已删除，但组织清理失败或待重试：${sync.error || sync.cleanup?.error || "请执行全局同步重试"}`);
-        toast("项目及对应组织清理已完成");
+        toast("本地项目已删除，成员已清理，平台组织保留");
       } catch (error) { toast(error.message || "项目删除失败"); }
     });
   }

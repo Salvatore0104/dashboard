@@ -29,6 +29,35 @@ class ProjectSyncUnitTests(unittest.TestCase):
     def test_normalize_name_removes_whitespace(self):
         self.assertEqual(normalize_name(" 张  三 "), "张三")
 
+    def test_new_organization_initializes_once_and_preserves_spent_balance(self):
+        client = EasyAIClient()
+        client.mode = 'mock'
+        client._mock_orgs['test-parent'] = {'_id':'test-parent', 'name':'执行项目组'}
+        with patch('project_sync.EasyAIClient', return_value=client), patch('project_sync.SYNC_ENABLED', True):
+            first = ensure_binding(self.conn, 'new-project', 'New project')
+            org = next(o for o in client._mock_orgs.values() if organization_id(o) == first['easyai_org_id'])
+            self.assertEqual(org['balance'], 5000)
+            self.assertEqual(org['balance_deduction_strategy'], 'organization_first')
+            org['balance'] = 4200
+            again = ensure_binding(self.conn, 'new-project', 'New project')
+            self.assertEqual(again['easyai_org_id'], first['easyai_org_id'])
+            self.assertEqual(org['balance'], 4200)
+
+    def test_real_create_sends_initial_balance_and_strategy_in_one_request(self):
+        client = EasyAIClient()
+        client.mode = 'real'
+        with patch.object(client, '_request', return_value={'data': {'_id': 'org-new'}}) as request:
+            client.create_organization('New', 'parent', 'project')
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(request.call_args.args, ('POST', '/organization'))
+        self.assertEqual(request.call_args.kwargs['json']['balance'], 5000)
+        self.assertEqual(request.call_args.kwargs['json']['balance_deduction_strategy'], 'organization_first')
+
+    def test_member_cleanup_allows_retained_balance(self):
+        client = EasyAIClient()
+        with patch.object(client, 'list_organizations', return_value=[{'_id':'org', 'parent':'parent', 'description':'dashboard project p', 'balance':5000, 'users':[]} ]):
+            self.assertIsNotNone(client.validate_owned_organization('org','parent','p',[],require_empty=False))
+
     def test_test_org_name_is_idempotent(self):
         first = test_org_name("演示项目")
         self.assertEqual(first, "演示项目")
@@ -54,9 +83,11 @@ class ProjectSyncUnitTests(unittest.TestCase):
     def test_delete_guard_requires_dashboard_parent_and_description(self):
         client = EasyAIClient()
         client._mock_orgs['org-1'] = {'_id': 'org-1', 'name': '项目', 'parent': 'parent-1', 'description': 'dashboard project p1'}
-        self.assertTrue(client.delete_organization('org-1', 'parent-1', 'p1')['deleted'])
+        with self.assertRaisesRegex(RuntimeError, '禁止删除'):
+            client.delete_organization('org-1', 'parent-1', 'p1')
+        self.assertIn('org-1', client._mock_orgs)
         client._mock_orgs['org-2'] = {'_id': 'org-2', 'name': '外部', 'parent': 'parent-1', 'description': 'other'}
-        with self.assertRaisesRegex(RuntimeError, '不匹配'):
+        with self.assertRaisesRegex(RuntimeError, '禁止删除'):
             client.delete_organization('org-2', 'parent-1', 'p2')
 
     def test_matching_uses_dingtalk_ids_and_does_not_fallback_to_name(self):
