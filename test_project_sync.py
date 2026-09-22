@@ -266,6 +266,14 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.assertIn("sensitive = ('password', 'secret', 'token', 'api_key'", app_source)
         self.assertIn("if not any(part in str(c['key']).lower() for part in sensitive)", app_source)
 
+    def test_global_sync_result_render_and_delete_feedback_contract(self):
+        js = Path(__file__).with_name("static").joinpath("admin.js").read_text(encoding="utf-8")
+        self.assertIn("item.project_id, name: item.project_name", js)
+        self.assertIn("item.organization_name || item.org_name", js)
+        self.assertIn("本地已删除，但组织清理失败或待重试", js)
+        self.assertIn("actionConfirmBtn.disabled = true", js)
+        self.assertNotIn('if (!confirm("确定删除此项目及其全部分配吗？")) return;', js)
+
 
 if __name__ == "__main__":
     unittest.main()

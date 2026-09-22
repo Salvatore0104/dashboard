@@ -70,8 +70,10 @@
     els.actionConfirmBtn.addEventListener("click", async () => {
       const action = state.confirmAction;
       state.confirmAction = null;
+      els.actionConfirmBtn.disabled = true;
       closeModal("actionConfirmModal");
-      if (action) await action();
+      try { if (action) await action(); }
+      finally { els.actionConfirmBtn.disabled = false; }
     });
     byId("syncPersonsBtn").addEventListener("click", openSyncPersonsModal);
     byId("bindPersonsBtn").addEventListener("click", openBindingModal);
@@ -258,8 +260,9 @@
     const totals = data.totals || {};
     els.globalSyncSummary.textContent = `当前项目 ${data.projects?.length || 0} 个：新增组织 ${totals.create_org || 0}，改名 ${totals.rename_org || 0}，新增成员 ${totals.added || 0}，已存在 ${totals.existing || 0}，待移除成员 ${totals.removed || 0}，未匹配 ${totals.unmatched || 0}，冲突 ${totals.conflict || 0}，待处理清理 ${totals.pending_delete || 0}。`;
     els.globalSyncBody.innerHTML = (data.projects || []).map((item) => {
-      const p = item.project || {};
-      const org = item.organization_action === "create" ? "待创建" : item.organization_action === "pending_delete" ? "项目已删除" : (item.binding?.organization_name || "已绑定");
+      const p = item.project || { id: item.project_id, name: item.project_name };
+      const orgName = item.binding?.organization_name || item.organization_name || item.org_name;
+      const org = item.organization_action === "create" ? "待创建" : item.organization_action === "pending_delete" ? "项目已删除" : (orgName || "已绑定");
       const member = `新增 ${item.added || 0} / 已存在 ${item.existing || 0}`;
       const issues = `冲突 ${item.conflict || 0} / 未匹配 ${item.unmatched || 0}`;
       const removal = item.organization_action === "pending_delete" ? `项目已删除 · 待清理（成员 ${item.removed || 0}）` : `移除离开成员 ${item.removed || 0} 人`;
@@ -565,13 +568,17 @@
   }
 
   async function deleteProject(id) {
-    if (!confirm("确定删除此项目及其全部分配吗？")) return;
-    try {
-      const result = await fetchJson(`api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (!result.success) throw new Error(result.message || "项目删除失败");
-    } catch (error) { return toast(error.message || "项目删除失败"); }
-    await loadAll();
-    toast("项目已删除");
+    const project = state.projects.find((item) => String(item.id) === String(id));
+    openActionConfirm("确认删除项目", `将删除项目“${project?.name || id}”及其本地分配。\n\n系统会尝试清理对应的 Dashboard 组织；若组织清理失败，本地删除仍会完成，但会明确标记待重试。`, async () => {
+      try {
+        const result = await fetchJson(`api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
+        if (!result.success) throw new Error(result.message || "项目删除失败");
+        await loadAll();
+        const sync = result.sync || {};
+        if (sync.success === false || sync.retryable) return toast(`项目本地已删除，但组织清理失败或待重试：${sync.error || sync.cleanup?.error || "请执行全局同步重试"}`);
+        toast("项目及对应组织清理已完成");
+      } catch (error) { toast(error.message || "项目删除失败"); }
+    });
   }
 
   async function deletePerson(id) {
