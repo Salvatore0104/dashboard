@@ -293,6 +293,24 @@
       </section>`).join("");
     els.personList.querySelectorAll("[data-leave-person]").forEach((btn) => btn.addEventListener("click", () => openLeaveModal(btn.dataset.leavePerson)));
     els.personList.querySelectorAll("[data-delete-person]").forEach((btn) => btn.addEventListener("click", () => deletePerson(btn.dataset.deletePerson)));
+    els.personList.querySelectorAll("[data-toggle-board]").forEach((input) => input.addEventListener("change", () => togglePersonOnBoard(input.dataset.toggleBoard, input.checked)));
+  }
+
+  async function togglePersonOnBoard(personId, visible) {
+    const person = state.persons.find((item) => String(item.id) === String(personId));
+    if (!person) return;
+    try {
+      const response = await fetch(`api/persons/${encodeURIComponent(personId)}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: person.name, groupType: person.group_type, avatar: person.avatar || "", dingId: person.ding_id || "", unionId: person.dingtalk_union_id || "", department: person.department || "", selected: visible, sortOrder: person.sort_order || 0, leaveStatus: person.leave_status || "", leaveStart: person.leave_start || "", leaveEnd: person.leave_end || "", leaveType: person.leave_type || "" })
+      });
+      if (!response.ok) throw new Error("保存失败");
+      person.selected = visible ? 1 : 0;
+      toast(visible ? "已显示在前台看板" : "已从前台看板隐藏");
+    } catch (error) {
+      toast(error.message || "显示设置保存失败");
+      renderPersons();
+    }
   }
 
   // 获取人员出差状态：出差中（今天在区间内）> 即将出差（今天还没到开始日期）
@@ -378,6 +396,7 @@
         <small>${esc(groupLabel)}</small>
       </span>
       ${statusTag}
+      <label class="board-visibility-toggle"><input type="checkbox" data-toggle-board="${esc(person.id)}" ${person.selected !== 0 && person.selected !== false ? "checked" : ""}>前台显示</label>
       <button class="btn btn-warning btn-sm" data-leave-person="${esc(person.id)}">请假</button>
       <button class="btn btn-danger btn-sm" data-delete-person="${esc(person.id)}">删除</button>
     </article>`;

@@ -193,7 +193,7 @@
           fetchJson("api/config").catch(() => ({}))
         ]);
         this.state.projects = projects;
-        this.state.persons = persons;
+        this.state.persons = persons.filter((person) => person.selected !== 0 && person.selected !== false);
         this.state.assignments = assignments;
         this.state.config = config || {};
         window.ThemeStore?.save(this.state.config);

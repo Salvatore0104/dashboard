@@ -385,6 +385,9 @@ a {
   min-width: min(280px, 100%);
 }
 
+.dept-row-1 .dept-group:first-child { flex: 1 1 calc(33.333% - 10px); }
+.dept-row-1 .dept-group:last-child { flex: 2 1 calc(66.667% - 10px); }
+
 .dept-group {
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
@@ -443,6 +446,15 @@ a {
   user-select: none;
   font-weight: 700;
   transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.board-visibility-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .person-chip:hover,
