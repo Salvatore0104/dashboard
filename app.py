@@ -246,9 +246,10 @@ def update_project(pid):
         sql = f"UPDATE projects SET {','.join(updates)} WHERE id=?"
         conn.execute(sql, params)
 
-    if 'name' in data:
+    if any(key in data for key in ('name', 'startDate', 'endDate')):
         try:
-            rename_result = project_sync_coordinator.run(pid, lambda: update_project_binding_name(conn, pid, data['name']))
+            project_name = conn.execute('SELECT name FROM projects WHERE id=?', (pid,)).fetchone()['name']
+            rename_result = project_sync_coordinator.run(pid, lambda: update_project_binding_name(conn, pid, project_name))
             if rename_result.get('skipped'):
                 conn.rollback()
                 conn.close()

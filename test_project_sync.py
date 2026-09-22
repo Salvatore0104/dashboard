@@ -47,11 +47,44 @@ class ProjectSyncUnitTests(unittest.TestCase):
         client = EasyAIClient()
         client.mode = 'real'
         with patch.object(client, '_request', return_value={'data': {'_id': 'org-new'}}) as request:
-            client.create_organization('New', 'parent', 'project')
+            client.create_organization('New', 'parent', 'project', description='20260922-20260929')
         self.assertEqual(request.call_count, 1)
         self.assertEqual(request.call_args.args, ('POST', '/organization'))
         self.assertEqual(request.call_args.kwargs['json']['balance'], 5000)
         self.assertEqual(request.call_args.kwargs['json']['balance_deduction_strategy'], 'organization_first')
+        self.assertEqual(request.call_args.kwargs['json']['description'], '20260922-20260929')
+
+    def test_reuse_preserves_finances_and_updates_project_dates(self):
+        client = EasyAIClient(); client.mode = 'mock'
+        client._mock_orgs = {'parent': {'_id':'parent','name':'执行项目组'},
+                            'old': {'_id':'old','parent':'parent','name':'Existing','balance':123,'balance_deduction_strategy':'user_only'}}
+        self.conn.execute("INSERT INTO projects VALUES ('reuse','Existing','2026-09-22','2026-09-29')")
+        with patch('project_sync.EasyAIClient', return_value=client), patch('project_sync.SYNC_ENABLED', True), patch.object(client,'create_organization',side_effect=AssertionError('must reuse')):
+            binding = ensure_binding(self.conn,'reuse','Existing')
+            self.assertEqual(binding['easyai_org_id'],'old')
+            self.assertEqual(client._mock_orgs['old']['description'],'20260922-20260929')
+            self.assertEqual(client._mock_orgs['old']['balance'],123)
+            self.assertEqual(client._mock_orgs['old']['balance_deduction_strategy'],'user_only')
+            self.conn.execute("UPDATE projects SET end_date='2026-10-01' WHERE id='reuse'")
+            ensure_binding(self.conn,'reuse','Existing')
+            self.assertEqual(client._mock_orgs['old']['description'],'20260922-20261001')
+            self.assertEqual(client._mock_orgs['old']['balance'],123)
+            self.conn.execute("DELETE FROM projects WHERE id='reuse'")
+            self.conn.execute("UPDATE project_easyai_binding SET status='retained' WHERE project_id='reuse'")
+            self.conn.execute("INSERT INTO projects VALUES ('reuse-new','Existing','2026-10-01','2026-10-09')")
+            rebound = ensure_binding(self.conn,'reuse-new','Existing')
+            self.assertEqual(rebound['easyai_org_id'],'old')
+            self.assertEqual(client._mock_orgs['old']['balance'],123)
+            self.assertEqual(client._mock_orgs['old']['balance_deduction_strategy'],'user_only')
+
+    def test_duplicate_name_is_not_automatically_bound(self):
+        client = EasyAIClient(); client.mode = 'mock'
+        client._mock_orgs = {'parent':{'_id':'parent','name':'执行项目组'},
+                            'a':{'_id':'a','name':'Duplicate','parent':'parent'},
+                            'b':{'_id':'b','name':'Duplicate','parent':'parent'}}
+        with patch('project_sync.EasyAIClient',return_value=client), patch('project_sync.SYNC_ENABLED',True):
+            with self.assertRaisesRegex(RuntimeError,'多个同名'):
+                ensure_binding(self.conn,'dup','Duplicate')
 
     def test_member_cleanup_allows_retained_balance(self):
         client = EasyAIClient()

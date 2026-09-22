@@ -75,9 +75,13 @@ class FakeAdapter:
     def validate_owned_organization(self, org_id, parent_id, external_id, managed_user_ids=None, require_empty=False):
         self.calls.append(("validate", str(org_id), str(parent_id), str(external_id), list(managed_user_ids or []), require_empty))
         org = self.organizations.get(str(org_id))
-        if not org or org["parent"] != str(parent_id) or org["description"] != f"dashboard project {external_id}":
+        if not org or org["parent"] != str(parent_id):
             raise RuntimeError("组织归属或 Dashboard 标记不匹配")
         return org
+
+    def update_organization_description(self, org_id, description):
+        self.calls.append(('description', str(org_id), description))
+        self.organizations.setdefault(str(org_id), {})['description'] = description
 
     def update_organization_name(self, org_id, name):
         self.calls.append(("rename", str(org_id), name))
@@ -167,6 +171,13 @@ class LifecycleAcceptanceTests(unittest.TestCase):
         self.assertTrue(rejoined["success"])
         adds = [c[1] for c in self.fake.calls if c[0] == "add" and c[1]]
         self.assertEqual(adds, [["easy-a"], ["easy-a"]])
+
+    def test_project_date_edit_updates_description(self):
+        self.add_project('p-a')
+        self.conn.commit()
+        response = dashboard_app.app.test_client().put('/api/projects/p-a', json={'startDate':'2026-09-22','endDate':'2026-09-29'})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(self.fake.organizations['org-p-a']['description'],'20260922-20260929')
 
     def test_project_expiry_clears_members_but_retains_organization(self):
         self.add_project("p-a")
@@ -274,7 +285,7 @@ class LifecycleAcceptanceTests(unittest.TestCase):
         self.add_person_assignment("p-a")
         self.conn.execute("INSERT INTO project_easyai_member (project_id, easyai_org_id, easyai_user_id, dashboard_user_id, status, first_synced_at, last_synced_at) VALUES ('p-a', 'org-p-a', 'easy-a', 'person-a', 'active', 1, 1)")
         self.conn.commit()
-        self.fake.organizations["org-p-a"]["description"] = "untrusted organization"
+        self.fake.organizations["org-p-a"]["parent"] = "untrusted-parent"
         with self.assertRaisesRegex(RuntimeError, "归属"):
             cleanup_deleted_binding(self.conn, "p-a", client=self.fake)
         self.assertFalse(any(call[0] == "remove" for call in self.fake.calls))
