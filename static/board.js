@@ -193,7 +193,7 @@
           fetchJson("api/config").catch(() => ({}))
         ]);
         this.state.projects = projects;
-        this.state.persons = persons;
+        this.state.persons = persons.filter((person) => person.selected !== 0 && person.selected !== false);
         this.state.assignments = assignments;
         this.state.config = config || {};
         window.ThemeStore?.save(this.state.config);
@@ -406,7 +406,16 @@
         ...DEPTS.map(d => d.name).filter(name => groups.has(name)),
         ...[...groups.keys()].filter(name => !DEPTS.some(d => d.name === name))
       ])];
-      const html = deptOrder.map((deptName) => {
+      const rowForDept = (deptName) => {
+        const name = String(deptName || "");
+        if (name.includes("后期") || name.includes("前期") || name.includes("美术")) return 0;
+        if (["项目管理组", "演艺制作部", "视觉工程部", "市场部"].some((item) => name.includes(item))) return 1;
+        return 2;
+      };
+      const rows = [[], [], []];
+      deptOrder.forEach((deptName) => rows[rowForDept(deptName)].push(deptName));
+      const html = rows.map((row, rowIndex) => {
+        const groupsHtml = row.map((deptName) => {
         const persons = groups.get(deptName) || [];
         if (!persons.length) return "";
         const collapsed = this.state.collapsedDepts.has(deptName);
@@ -421,6 +430,8 @@
             </button>
             <div class="dept-chips" ${collapsed ? 'style="display:none"' : ""}>${chips}</div>
           </section>`;
+        }).join("");
+        return groupsHtml ? `<div class="dept-row dept-row-${rowIndex + 1}">${groupsHtml}</div>` : "";
       }).join("");
       this.els.personChips.innerHTML = html || `<div class="empty-state"><div class="empty-box">${Icons.svg("users")}<p>暂无人员，请在后台同步或添加人员。</p></div></div>`;
       this.bindPoolEvents();
@@ -1358,14 +1369,14 @@
           toDelete.push(item.id);
         }
       }
-      await Promise.all(toDelete.map((id) => fetch(`api/assignments/${encodeURIComponent(id)}`, { method: "DELETE" })));
+      await Promise.all(toDelete.map((id) => fetch(`api/assignments/${encodeURIComponent(id)}`, { method: "DELETE" }).then(readAssignmentMutation)));
       this.state.assignments = this.state.assignments.filter((a) => !toDelete.some((id) => String(id) === String(a.id)));
       if (editingId) {
         await fetch(`api/assignments/${encodeURIComponent(editingId)}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ startDate: dateStr(mergedStart), endDate: dateStr(mergedEnd) })
-        });
+        }).then(readAssignmentMutation);
         const existing = this.state.assignments.find((a) => String(a.id) === String(editingId));
         if (existing) {
           existing.start_date = dateStr(mergedStart);
@@ -1378,7 +1389,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId, personId, startDate: dateStr(mergedStart), endDate: dateStr(mergedEnd) })
       });
-      const result = await response.json().catch(() => ({}));
+      const result = await readAssignmentMutation(response);
       this.state.assignments.push({
         id: result.id || `local-${Date.now()}`,
         project_id: projectId,
@@ -1414,6 +1425,15 @@
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
       return response.json();
     });
+  }
+
+  async function readAssignmentMutation(response) {
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || body.success === false) throw new Error(body.message || `${response.status} ${response.statusText}`);
+    if (body.sync && body.sync.success === false) {
+      window.alert(`本地分配已保存，但项目组织同步失败：${body.sync.error || "请稍后重试"}`);
+    }
+    return body;
   }
 
   function parsePersonIds(dataTransfer) {

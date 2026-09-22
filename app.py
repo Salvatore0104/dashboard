@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env.local'), override=False)
 load_dotenv(override=False)
 
-from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, load_easyai_runtime_config, normalize_bearer_token, mask_secret, EasyAIClient
+from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, preview_all_projects, sync_all_projects, cleanup_deleted_binding, refresh_identity_inventory, identity_inventory_preview, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, load_easyai_runtime_config, normalize_bearer_token, mask_secret, EasyAIClient, ProjectSyncCoordinator
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
@@ -246,7 +246,11 @@ def update_project(pid):
 
     if 'name' in data:
         try:
-            update_project_binding_name(conn, pid, data['name'])
+            rename_result = project_sync_coordinator.run(pid, lambda: update_project_binding_name(conn, pid, data['name']))
+            if rename_result.get('skipped'):
+                conn.rollback()
+                conn.close()
+                return jsonify({'success': False, 'message': '该项目已有同步任务正在运行'}), 409
         except Exception as exc:
             conn.rollback()
             conn.close()
@@ -265,7 +269,8 @@ def delete_project(pid):
     conn.commit()
     conn.close()
     broadcast('projects_changed', {'action': 'delete', 'id': pid})
-    return jsonify({'success': True})
+    sync_status = sync_deleted_project(pid)
+    return jsonify({'success': True, 'sync': sync_status})
 
 # ==================== 项目组织同步 API ====================
 
@@ -296,17 +301,28 @@ def project_sync_preview(pid):
 @app.route('/api/project-sync/<pid>/run', methods=['POST'])
 def project_sync_run(pid):
     data = request.json or {}
-    conn = get_db()
+    def run_one():
+        conn = get_db()
+        try:
+            result = sync_project(conn, pid, data.get('trigger', 'manual'), data.get('operatorId', 'local-admin'))
+            conn.commit()
+            broadcast('projects_changed', {'action': 'sync', 'id': pid})
+            return result
+        except Exception as exc:
+            # sync_project records the failed sync_run and audit entry before
+            # raising; keep those records durable for scheduler/manual retries.
+            conn.commit()
+            raise RuntimeError(redact_error(exc)) from exc
+        finally:
+            conn.close()
+
     try:
-        result = sync_project(conn, pid, data.get('trigger', 'manual'), data.get('operatorId', 'local-admin'))
-        conn.commit()
-        broadcast('projects_changed', {'action': 'sync', 'id': pid})
+        result = project_sync_coordinator.run(pid, run_one)
+        if result.get('skipped'):
+            return jsonify({'success': False, 'message': '该项目已有同步任务正在运行', **result}), 409
         return jsonify(result)
     except Exception as exc:
-        conn.rollback()
         return jsonify({'success': False, 'message': redact_error(exc)}), 400
-    finally:
-        conn.close()
 
 
 @app.route('/api/project-sync/runs', methods=['GET'])
@@ -317,12 +333,115 @@ def project_sync_runs():
     return jsonify([dict(row) for row in rows])
 
 
+@app.route('/api/project-sync/global/logs', methods=['GET'])
+def project_sync_global_logs():
+    conn = get_db()
+    rows = conn.execute("SELECT id, trigger, status, started_at, finished_at, added_count, existing_count, unmatched_count, conflict_count, error_count, details FROM sync_run WHERE project_id='__global__' ORDER BY started_at DESC LIMIT 100").fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        item = dict(row)
+        try:
+            details = json.loads(item.pop('details') or '{}')
+        except (TypeError, ValueError):
+            details = {}
+        item['totals'] = details.get('totals', {})
+        result.append(item)
+    return jsonify(result)
+
+
+@app.route('/api/project-sync/global/preview', methods=['POST'])
+def project_sync_global_preview():
+    conn = get_db()
+    try:
+        return jsonify({'success': True, **preview_all_projects(conn)})
+    except Exception as exc:
+        return jsonify({'success': False, 'message': redact_error(exc)}), 400
+    finally:
+        conn.close()
+
+
+@app.route('/api/project-sync/global/run', methods=['POST'])
+def project_sync_global_run():
+    data = request.json or {}
+    def run_one():
+        conn = get_db()
+        try:
+            result = sync_all_projects(conn, data.get('operatorId', 'local-admin'), project_sync_coordinator)
+            conn.commit()
+            broadcast('projects_changed', {'action': 'global_sync'})
+            return result
+        except Exception as exc:
+            conn.commit()
+            raise RuntimeError(redact_error(exc)) from exc
+        finally:
+            conn.close()
+    try:
+        result = project_sync_coordinator.run('__global__', run_one)
+        if result.get('skipped'):
+            return jsonify({'success': False, 'message': '全局同步任务正在运行', **result}), 409
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({'success': False, 'message': redact_error(exc)}), 400
+
+
 @app.route('/api/project-sync/identities', methods=['GET'])
 def project_sync_identities():
     conn = get_db()
     rows = conn.execute('SELECT * FROM external_user_identity ORDER BY match_status, display_name').fetchall()
     conn.close()
     return jsonify([dict(row) for row in rows])
+
+
+@app.route('/api/project-sync/identities/refresh', methods=['POST'])
+def refresh_project_sync_identities():
+    conn = get_db()
+    try:
+        client = EasyAIClient(load_easyai_runtime_config(conn))
+        users = client.list_users()
+        matches = refresh_identity_inventory(conn, users, (request.json or {}).get('operatorId', 'local-admin'))
+        conn.commit()
+        return jsonify({'success': True, 'total': len(matches), 'matched': sum(item['status'] in {'auto_matched', 'confirmed'} for item in matches), 'candidate': sum(item['status'] == 'candidate' for item in matches), 'unmatched': sum(item['status'] == 'unmatched' for item in matches), 'conflict': sum(item['status'] == 'conflict' for item in matches)})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({'success': False, 'message': redact_error(exc)}), 400
+    finally:
+        conn.close()
+
+
+@app.route('/api/project-sync/identities/preview', methods=['POST'])
+def preview_project_sync_identities():
+    conn = get_db()
+    try:
+        users = EasyAIClient(load_easyai_runtime_config(conn)).list_users()
+        matches = identity_inventory_preview(conn, users)
+        existing = {str(row['dashboard_user_id']) for row in conn.execute("SELECT dashboard_user_id FROM external_user_identity WHERE easyai_user_id<>'' AND match_status IN ('auto_matched','confirmed')").fetchall()}
+        matched = sum(item['status'] in {'auto_matched', 'confirmed'} for item in matches)
+        bindable = sum(item['status'] == 'auto_matched' and str(item['dashboard_user_id']) not in existing for item in matches)
+        return jsonify({'success': True, 'total': len(matches), 'matched': matched, 'bindable': bindable, 'existingBound': matched - bindable, 'candidate': sum(item['status'] == 'candidate' for item in matches), 'unmatched': sum(item['status'] == 'unmatched' for item in matches), 'conflict': sum(item['status'] == 'conflict' for item in matches)})
+    except Exception as exc:
+        return jsonify({'success': False, 'message': redact_error(exc)}), 400
+    finally:
+        conn.close()
+
+
+@app.route('/api/project-sync/identities/bind-all', methods=['POST'])
+def bind_all_project_sync_identities():
+    conn = get_db()
+    try:
+        operator_id = (request.json or {}).get('operatorId', 'local-admin')
+        users = EasyAIClient(load_easyai_runtime_config(conn)).list_users()
+        before = {str(row['dashboard_user_id']) for row in conn.execute("SELECT dashboard_user_id FROM external_user_identity WHERE easyai_user_id<>'' AND match_status IN ('auto_matched','confirmed')").fetchall()}
+        matches = refresh_identity_inventory(conn, users, operator_id)
+        new_bound = sum(item['status'] == 'auto_matched' and item['dashboard_user_id'] not in before for item in matches)
+        existing_bound = sum(item['status'] in {'auto_matched', 'confirmed'} and item['dashboard_user_id'] in before for item in matches)
+        conn.commit()
+        return jsonify({'success': True, 'total': len(matches), 'bound': new_bound, 'newBound': new_bound, 'existingBound': existing_bound, 'matched': sum(item['status'] in {'auto_matched', 'confirmed'} for item in matches), 'candidate': sum(item['status'] == 'candidate' for item in matches), 'unmatched': sum(item['status'] == 'unmatched' for item in matches), 'conflict': sum(item['status'] == 'conflict' for item in matches)})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({'success': False, 'message': redact_error(exc)}), 400
+    finally:
+        conn.close()
 
 
 @app.route('/api/project-sync/identities/<user_id>/confirm', methods=['POST'])
@@ -388,24 +507,26 @@ def create_person():
         
         if existing:
             # 存在则更新（保留请假状态等原有数据，只更新基本信息）
+            union_id = data.get('unionId', data.get('dingtalkUnionId'))
+            selected = data.get('selected')
             conn.execute('''
                 UPDATE persons SET 
                     name = ?,
                     group_type = ?,
                     avatar = ?,
                     ding_id = ?,
-                    dingtalk_union_id = ?,
+                    dingtalk_union_id = COALESCE(?, dingtalk_union_id),
                     department = ?,
-                    selected = ?
+                    selected = COALESCE(?, selected)
                 WHERE id = ?
             ''', (
                 name,
                 data.get('groupType', 'pre'),
                 data.get('avatar', ''),
                 data.get('dingId', ''),
-                data.get('unionId', data.get('dingtalkUnionId', '')),
+                union_id,
                 data.get('department', ''),
-                1 if data.get('selected') else 0,
+                (1 if selected else 0) if selected is not None else None,
                 pid
             ))
             print(f"[PERSON] 更新人员: id={pid}, name={name}")
@@ -417,7 +538,7 @@ def create_person():
             ''', (
                 pid, name, data.get('groupType', 'pre'), data.get('avatar', ''),
                 data.get('dingId', ''), data.get('unionId', data.get('dingtalkUnionId', '')), data.get('department', ''),
-                1 if data.get('selected') else 0, data.get('sortOrder', 0),
+                1 if data.get('selected', True) else 0, data.get('sortOrder', 0),
                 data.get('leaveStatus', ''), data.get('leaveStart', ''), data.get('leaveEnd', ''),
                 data.get('leaveType', '')
             ))
@@ -511,12 +632,17 @@ def create_assignment():
         conn.close()
     
     broadcast('assignments_changed', {'action': 'create', 'id': aid})
-    return jsonify({'success': True, 'id': aid})
+    sync_status = sync_assignment_project(data['projectId'], 'assignment_create')
+    return jsonify({'success': True, 'id': aid, 'sync': sync_status})
 
 @app.route('/api/assignments/<aid>', methods=['PUT'])
 def update_assignment(aid):
     data = request.json
     conn = get_db()
+    assignment = conn.execute('SELECT project_id FROM assignments WHERE id=?', (aid,)).fetchone()
+    if not assignment:
+        conn.close()
+        return jsonify({'success': False, 'message': '分配不存在'}), 404
     conn.execute(
         'UPDATE assignments SET start_date=?, end_date=? WHERE id=?',
         (data['startDate'], data['endDate'], aid)
@@ -524,16 +650,20 @@ def update_assignment(aid):
     conn.commit()
     conn.close()
     broadcast('assignments_changed', {'action': 'update', 'id': aid})
-    return jsonify({'success': True})
+    return jsonify({'success': True, 'sync': sync_assignment_project(assignment['project_id'], 'assignment_update')})
 
 @app.route('/api/assignments/<aid>', methods=['DELETE'])
 def delete_assignment(aid):
     conn = get_db()
+    assignment = conn.execute('SELECT project_id FROM assignments WHERE id=?', (aid,)).fetchone()
+    if not assignment:
+        conn.close()
+        return jsonify({'success': False, 'message': '分配不存在'}), 404
     conn.execute('DELETE FROM assignments WHERE id=?', (aid,))
     conn.commit()
     conn.close()
     broadcast('assignments_changed', {'action': 'delete', 'id': aid})
-    return jsonify({'success': True})
+    return jsonify({'success': True, 'sync': sync_assignment_project(assignment['project_id'], 'assignment_delete')})
 
 # ==================== 配置 API ====================
 
@@ -1030,18 +1160,24 @@ def export_data():
         projects = conn.execute('SELECT * FROM projects ORDER BY start_date').fetchall()
         persons = conn.execute('SELECT * FROM persons ORDER BY group_type, name').fetchall()
         assignments = conn.execute('SELECT * FROM assignments ORDER BY start_date').fetchall()
-        config = conn.execute('SELECT * FROM config').fetchall()
+        config = conn.execute('SELECT key, value FROM config').fetchall()
         conn.close()
+        sensitive = ('password', 'secret', 'token', 'api_key', 'apikey', 'access_key', 'private_key', 'cookie')
+        safe_config = {c['key']: c['value'] for c in config
+                       if not any(part in str(c['key']).lower() for part in sensitive)}
         
         data = {
             'export_time': time.strftime('%Y-%m-%d %H:%M:%S'),
             'projects': [dict(p) for p in projects],
             'persons': [dict(p) for p in persons],
             'assignments': [dict(a) for a in assignments],
-            'config': {c['key']: c['value'] for c in config}
+            'config': safe_config
         }
         
-        return jsonify({"success": True, "data": data})
+        response = jsonify({"success": True, "data": data})
+        response.headers["Content-Disposition"] = 'attachment; filename="dashboard-export.json"'
+        response.headers["Content-Type"] = "application/json; charset=utf-8"
+        return response
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
 
@@ -1452,7 +1588,48 @@ leave_scheduler_lock = threading.Lock()
 project_sync_scheduler_thread = None
 project_sync_scheduler_lock = threading.Lock()
 PROJECT_SYNC_SCHEDULER_ENABLED = os.getenv('SYNC_SCHEDULER_ENABLED', 'false').strip().lower() in {'1', 'true', 'yes', 'on'}
-PROJECT_SYNC_INTERVAL_SECONDS = max(60, int(os.getenv('SYNC_INTERVAL_MINUTES', '10')) * 60)
+
+
+def _project_sync_interval_seconds():
+    try:
+        minutes = int(os.getenv('SYNC_INTERVAL_MINUTES', '10'))
+    except (TypeError, ValueError):
+        minutes = 10
+    return max(1, minutes) * 60
+
+
+PROJECT_SYNC_INTERVAL_SECONDS = _project_sync_interval_seconds()
+project_sync_coordinator = ProjectSyncCoordinator()
+
+def sync_assignment_project(project_id, trigger):
+    """Run post-write sync without turning an external failure into a local rollback."""
+    def run_one():
+        conn = get_db()
+        try:
+            result = sync_project(conn, str(project_id), trigger, 'assignment')
+            conn.commit()
+            return result
+        except Exception as exc:
+            conn.commit()
+            return {'success': False, 'error': redact_error(exc), 'retryable': True}
+        finally:
+            conn.close()
+    return project_sync_coordinator.run(str(project_id), run_one)
+
+def sync_deleted_project(project_id):
+    """Process a deleted project's managed members while retaining a retryable local record."""
+    conn = get_db()
+    try:
+        def run_cleanup():
+            return cleanup_deleted_binding(conn, str(project_id), 'project-delete')
+        result = project_sync_coordinator.run(str(project_id), run_cleanup)
+        conn.commit()
+        return {'success': result.get('status') in {'deleted', 'already_deleted'}, 'projectId': str(project_id), 'cleanup': result, 'retryable': result.get('status') == 'failed'}
+    except Exception as exc:
+        conn.commit()
+        return {'success': False, 'projectId': str(project_id), 'error': redact_error(exc), 'retryable': True}
+    finally:
+        conn.close()
 
 def start_leave_sync_scheduler():
     """启动一次请假定时同步线程。"""
@@ -1465,22 +1642,33 @@ def start_leave_sync_scheduler():
 
 
 def schedule_project_sync():
-    """Run project membership synchronization at a conservative interval."""
+    """Run project membership synchronization every configured interval."""
     while True:
         time.sleep(PROJECT_SYNC_INTERVAL_SECONDS)
         conn = get_db()
-        projects = conn.execute('SELECT id FROM projects ORDER BY id').fetchall()
-        conn.close()
+        try:
+            projects = [row['id'] for row in conn.execute('SELECT id FROM projects ORDER BY id').fetchall()]
+        finally:
+            conn.close()
         for project in projects:
-            conn = get_db()
-            try:
-                sync_project(conn, project['id'], 'scheduler', 'scheduler')
-                conn.commit()
-            except Exception as exc:
-                conn.rollback()
-                print(f'[ProjectSync] scheduler failed for {project["id"]}: {redact_error(exc)}')
-            finally:
-                conn.close()
+            def run_one(project_id=project):
+                conn = get_db()
+                try:
+                    result = sync_project(conn, project_id, 'scheduler', 'scheduler')
+                    conn.commit()
+                    return result
+                except Exception as exc:
+                    # Preserve the failed sync_run/audit rows written by
+                    # sync_project so one project failure remains observable.
+                    conn.commit()
+                    print(f'[ProjectSync] scheduler failed for {project_id}: {redact_error(exc)}')
+                    return {"success": False, "error": redact_error(exc)}
+                finally:
+                    conn.close()
+
+            result = project_sync_coordinator.run(project, run_one)
+            if result.get('skipped'):
+                print(f'[ProjectSync] skipped overlapping run for {project}')
 
 
 def start_project_sync_scheduler():

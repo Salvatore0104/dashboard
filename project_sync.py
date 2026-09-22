@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 import uuid
 from collections import Counter, defaultdict
@@ -105,14 +106,29 @@ def now_ms():
     return int(time.time() * 1000)
 
 
+class ProjectSyncCoordinator:
+    """Prevent overlapping sync executions for the same project in this process."""
+
+    def __init__(self):
+        self._locks = defaultdict(threading.Lock)
+
+    def run(self, project_id, callback):
+        lock = self._locks[str(project_id)]
+        if not lock.acquire(blocking=False):
+            return {"success": False, "skipped": True, "reason": "already_running"}
+        try:
+            return callback()
+        finally:
+            lock.release()
+
+
 def normalize_name(value):
     return re.sub(r"[\s\u3000]+", "", str(value or "")).casefold()
 
 
 def test_org_name(name):
     raw = str(name or "未命名项目").strip()
-    prefix = TEST_PREFIX or "[TEST][dashboard-local]"
-    return raw if raw.startswith(prefix) else f"{prefix} {raw}"
+    return raw
 
 
 def redact_error(error):
@@ -224,7 +240,7 @@ class EasyAIClient:
             key = str(external_id)
             if key in self._mock_orgs:
                 return self._mock_orgs[key]
-            org = {"_id": f"mock-org-{hashlib.sha1(key.encode()).hexdigest()[:12]}", "name": name, "parent": parent_id, "external_id": key}
+            org = {"_id": f"mock-org-{hashlib.sha1(key.encode()).hexdigest()[:12]}", "name": name, "parent": parent_id, "external_id": key, "description": f"dashboard project {external_id}"}
             self._mock_orgs[key] = org
             return org
         # The deployed OpenAPI DTO uses `parent` and returns Mongo-style `_id`.
@@ -255,11 +271,11 @@ class EasyAIClient:
             raise RuntimeError("组织更新缺少组织 ID")
         if self.mode == "mock":
             for org in self._mock_orgs.values():
-                if str(org.get("id")) == str(org_id):
+                if organization_id(org) == str(org_id):
                     org["name"] = name
                     return org
             raise RuntimeError(f"未找到组织：{org_id}")
-        data = self._request("PUT", f"/organization/{org_id}", json={"name": name})
+        data = self._request("PATCH", f"/organization/{org_id}", json={"name": name})
         return data.get("data", data) if isinstance(data, dict) else data
 
     def list_users(self):
@@ -273,10 +289,60 @@ class EasyAIClient:
         if not user_ids:
             return {"added": 0, "user_ids": []}
         if self.mode == "mock":
-            return {"added": len(user_ids), "user_ids": user_ids, "org_id": org_id}
+            return {"added": len(user_ids), "success_ids": user_ids, "org_id": org_id}
         # The set endpoint replaces a user's organization membership.  Use the
         # additive OpenAPI endpoint so existing organization access is retained.
         path = f"/v1/openapi/organization/{org_id}/users/batch/add"
+        data = self._request("POST", path, json={"user_ids": user_ids})
+        return data.get("data", data) if isinstance(data, dict) else data
+
+    def delete_organization(self, org_id, parent_id, external_id):
+        """Delete only an organization proven to be a Dashboard-owned binding."""
+        org = self.validate_owned_organization(org_id, parent_id, external_id, require_empty=True)
+        if not org:
+            return {"deleted": True, "already_deleted": True, "id": str(org_id)}
+        if self.mode == "mock":
+            for key, value in list(self._mock_orgs.items()):
+                if organization_id(value) == str(org_id):
+                    del self._mock_orgs[key]
+                    return {"deleted": True, "id": str(org_id)}
+            return {"deleted": True, "already_deleted": True, "id": str(org_id)}
+        try:
+            data = self._request("DELETE", f"/organization/{org_id}")
+        except RuntimeError as exc:
+            if "API 404" in str(exc):
+                return {"deleted": True, "already_deleted": True, "id": str(org_id)}
+            raise
+        return data.get("data", data) if isinstance(data, dict) else data
+
+    def validate_owned_organization(self, org_id, parent_id, external_id, managed_user_ids=None, require_empty=False):
+        org = next((item for item in iter_organizations(self.list_organizations()) if organization_id(item) == str(org_id)), None)
+        if not org:
+            return None
+        actual_parent = str(org.get("parent") or org.get("parent_id") or org.get("parentId") or "")
+        description = str(org.get("description") or "")
+        child_nodes = org.get("children") or []
+        member_count = org.get("userCount", 0) or 0
+        users = org.get("users") or []
+        user_ids = {str(item.get("id") or item.get("_id") or item.get("user_id") or item.get("userId")) if isinstance(item, dict) else str(item) for item in users}
+        balance = org.get("balance", 0) or 0
+        if child_nodes or float(balance or 0) > 0:
+            raise RuntimeError("组织仍有子组织、成员或余额，拒绝删除")
+        if managed_user_ids is not None and not user_ids.issubset({str(item) for item in managed_user_ids}):
+            raise RuntimeError("组织包含非 Dashboard 托管成员，拒绝删除")
+        if require_empty and (int(member_count) > 0 or user_ids):
+            raise RuntimeError("组织移除后仍有成员，拒绝删除")
+        if actual_parent != str(parent_id) or description != f"dashboard project {external_id}":
+            raise RuntimeError("组织归属或 Dashboard 标记不匹配，拒绝删除")
+        return org
+
+    def remove_users_from_organization(self, user_ids, org_id):
+        user_ids = [str(item) for item in user_ids]
+        if not user_ids:
+            return {"removed": 0, "user_ids": []}
+        if self.mode == "mock":
+            return {"removed": len(user_ids), "success_ids": user_ids, "org_id": org_id}
+        path = f"/v1/openapi/organization/{org_id}/users/batch/remove"
         data = self._request("POST", path, json={"user_ids": user_ids})
         return data.get("data", data) if isinstance(data, dict) else data
 
@@ -300,6 +366,31 @@ class EasyAIClient:
             payload["union_id"] = str(dingtalk_union_id)
         data = self._request("POST", path, json=payload)
         return data.get("data", data) if isinstance(data, dict) else data
+
+
+def _batch_result(result, requested_ids, operation):
+    """Normalize provider batch responses without claiming partial work succeeded."""
+    requested = [str(item) for item in requested_ids]
+    body = result if isinstance(result, dict) else {}
+    def extract_ids(value):
+        if not isinstance(value, list):
+            return []
+        output = []
+        for item in value:
+            value_id = item.get("id") or item.get("user_id") or item.get("userId") or item.get("_id") if isinstance(item, dict) else item
+            if value_id:
+                output.append(str(value_id))
+        return output
+    candidates = body.get("success_ids") or body.get("succeeded_ids") or body.get("success") or body.get("succeeded")
+    failed = body.get("failed_ids") or body.get("failed_user_ids") or body.get("failed") or body.get("errors")
+    success_ids = extract_ids(candidates)
+    failed_ids = extract_ids(failed)
+    # A count or an echoed user_ids list does not identify which users changed.
+    if not candidates:
+        success_ids = []
+    success_ids = [item for item in success_ids if item in requested and item not in failed_ids]
+    return {"requested_ids": requested, "success_ids": success_ids, "failed_ids": failed_ids,
+            operation: len(success_ids), "partial": len(success_ids) < len(requested), "raw": result}
 
 
 def ensure_tables(conn):
@@ -386,14 +477,13 @@ def project_members(conn, project_id):
     rows = conn.execute("""
         SELECT DISTINCT p.id, p.name, p.ding_id, COALESCE(p.dingtalk_union_id, '') AS dingtalk_union_id
         FROM assignments a JOIN persons p ON p.id=a.person_id
-        WHERE a.project_id=? AND a.start_date<=? AND a.end_date>=?
+        WHERE a.project_id=?
+          AND (a.start_date='' OR a.start_date<=?)
+          AND (a.end_date='' OR a.end_date>=?)
     """, (project_id, today, today)).fetchall()
-    if rows:
-        return rows
-    return conn.execute("""
-        SELECT DISTINCT p.id, p.name, p.ding_id, COALESCE(p.dingtalk_union_id, '') AS dingtalk_union_id
-        FROM assignments a JOIN persons p ON p.id=a.person_id WHERE a.project_id=?
-    """, (project_id,)).fetchall()
+    # An empty active set is meaningful: expired assignments must leave the
+    # project organization instead of being re-added by a fallback query.
+    return rows
 
 
 def _user_id(user):
@@ -511,6 +601,31 @@ def persist_identity_matches(conn, matches, operator_id=""):
     return persisted
 
 
+def refresh_identity_inventory(conn, easyai_users, operator_id=""):
+    """Review every dashboard person against platform users without name-only binding."""
+    members = [dict(row) for row in conn.execute("SELECT id, name, ding_id, COALESCE(dingtalk_union_id, '') AS dingtalk_union_id FROM persons ORDER BY name").fetchall()]
+    matches = match_identities(conn, members, easyai_users)
+    persisted = persist_identity_matches(conn, matches, operator_id)
+    persisted_ids = {item["dashboard_user_id"] for item in persisted}
+    for item in matches:
+        if item["dashboard_user_id"] in persisted_ids:
+            continue
+        # Keep unresolved rows visible to reviewers, but never assign a platform ID.
+        conn.execute("""
+            INSERT INTO external_user_identity (dashboard_user_id, dingtalk_user_id, dingtalk_union_id, dingtalk_open_id, display_name, normalized_name, easyai_user_id, match_status, match_source, match_score, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, 0, datetime('now'))
+            ON CONFLICT(dashboard_user_id) DO UPDATE SET dingtalk_user_id=excluded.dingtalk_user_id, dingtalk_union_id=excluded.dingtalk_union_id, dingtalk_open_id=excluded.dingtalk_open_id, display_name=excluded.display_name, normalized_name=excluded.normalized_name, match_status=excluded.match_status, match_source=excluded.match_source, updated_at=datetime('now')
+        """, (item["dashboard_user_id"], item.get("dingtalk_user_id", ""), item.get("dingtalk_union_id", ""), item.get("dingtalk_open_id", ""), item["name"], normalize_name(item["name"]), item["status"], item.get("match_source", "")))
+    conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, affected_user_ids, result, created_at) VALUES (?, ?, '', 'identity_refresh', ?, 'succeeded', ?)", (str(uuid.uuid4()), operator_id, json.dumps([item["dashboard_user_id"] for item in matches]), now_ms()))
+    return matches
+
+
+def identity_inventory_preview(conn, easyai_users):
+    """Build a read-only full inventory preview for admin confirmation."""
+    members = [dict(row) for row in conn.execute("SELECT id, name, ding_id, COALESCE(dingtalk_union_id, '') AS dingtalk_union_id FROM persons ORDER BY name").fetchall()]
+    return match_identities(conn, members, easyai_users)
+
+
 def ensure_binding(conn, project_id, project_name):
     existing = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project_id,)).fetchone()
     if existing and existing["easyai_org_id"]:
@@ -596,11 +711,14 @@ def preview_project(conn, project_id):
         str(row["easyai_user_id"])
         for row in conn.execute("SELECT easyai_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (project_id,)).fetchall()
     }
+    active_dashboard_ids = {str(member["id"]) for member in members}
+    tracked_rows = conn.execute("SELECT easyai_user_id, dashboard_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (project_id,)).fetchall()
+    removable = [str(row["easyai_user_id"]) for row in tracked_rows if row["dashboard_user_id"] and str(row["dashboard_user_id"]) not in active_dashboard_ids]
     for item in matches:
         item["membership"] = "existing" if item.get("easyai_user_id") in known else "new"
     existing = sum(item["status"] in {"auto_matched", "confirmed"} and item["membership"] == "existing" for item in matches)
     added = sum(item["status"] in {"auto_matched", "confirmed"} and item["membership"] == "new" for item in matches)
-    return {"project": dict(project), "binding": dict(binding) if binding else None, "members": matches, "added": added, "existing": existing, "unmatched": counts["unmatched"], "conflict": counts["conflict"], "removed": 0, "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
+    return {"project": dict(project), "binding": dict(binding) if binding else None, "members": matches, "added": added, "existing": existing, "unmatched": counts["unmatched"], "conflict": counts["conflict"], "removed": len(removable), "removed_ids": removable, "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
 
 
 def sync_project(conn, project_id, trigger="manual", operator_id=""):
@@ -608,14 +726,13 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
     if not project:
         raise ValueError("项目不存在")
     run_id = str(uuid.uuid4())
-    idem = f"project-sync:{project_id}:{time.strftime('%Y%m%d%H%M')}"
+    # Idempotency is evaluated from the live provider relationship on every run.
+    # A historical success must not suppress A -> empty -> A re-entry or retries.
+    idem = f"project-sync:{project_id}:{run_id}"
     started = now_ms()
-    prior = conn.execute("SELECT * FROM sync_run WHERE idempotency_key=?", (idem,)).fetchone()
-    if prior:
-        if prior["status"] == "running":
-            raise RuntimeError("该项目已有同步任务正在运行")
-        details = json.loads(prior["details"] or "{}")
-        return {"success": prior["status"] == "succeeded", "run_id": prior["id"], "idempotent": True, "added": prior["added_count"], "existing": prior["existing_count"], "unmatched": prior["unmatched_count"], "conflict": prior["conflict_count"], "provider": details.get("provider", SYNC_MODE), "simulated": details.get("simulated", SYNC_MODE != "real"), "write_enabled": details.get("write_enabled", SYNC_ENABLED and SYNC_MODE == "real"), "details": details}
+    running = conn.execute("SELECT id FROM sync_run WHERE project_id=? AND status='running' LIMIT 1", (project_id,)).fetchone()
+    if running:
+        raise RuntimeError("该项目已有同步任务正在运行")
     conn.execute("INSERT INTO sync_run (id, project_id, trigger, status, started_at, idempotency_key) VALUES (?, ?, ?, 'running', ?, ?)", (run_id, project_id, trigger, started, idem))
     try:
         binding = ensure_binding(conn, project_id, project["name"])
@@ -628,9 +745,16 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
             users = [{"id": f"mock-user-{member['id']}", "name": member["name"], "dingtalk_user_id": member["ding_id"], "dingtalk_union_id": member["dingtalk_union_id"]} for member in members if member["ding_id"] or member["dingtalk_union_id"]]
         matches = match_identities(conn, members, users)
         persisted = persist_identity_matches(conn, matches, operator_id)
-        tracked = {str(row["easyai_user_id"]) for row in conn.execute("SELECT easyai_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (project_id,)).fetchall()}
+        tracked_rows = conn.execute("SELECT easyai_user_id, dashboard_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (project_id,)).fetchall()
+        tracked = {str(row["easyai_user_id"]) for row in tracked_rows}
         matched_ids = [item["easyai_user_id"] for item in persisted if item["easyai_user_id"]]
         new_ids = [user_id for user_id in matched_ids if str(user_id) not in tracked]
+        active_ids = {str(user_id) for user_id in matched_ids}
+        active_dashboard_ids = {str(member["id"]) for member in members}
+        # Only remove members that this project explicitly managed and whose
+        # dashboard assignment is no longer active. Conflicts stay in place.
+        stale_ids = sorted(str(row["easyai_user_id"]) for row in tracked_rows
+                           if row["dashboard_user_id"] and str(row["dashboard_user_id"]) not in active_dashboard_ids)
         existing_count = len(matched_ids) - len(new_ids)
         identity_results = []
         for item in persisted:
@@ -638,23 +762,133 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
                 identity_results.append(client.bind_dingtalk_identity(item["easyai_user_id"], item.get("dingtalk_user_id", ""), item.get("dingtalk_union_id", "")))
             else:
                 identity_results.append({"user_id": item["easyai_user_id"], "status": "local_identity_only"})
-        added = client.add_users_to_organization(new_ids, binding["easyai_org_id"]) if SYNC_ENABLED else {"added": len(new_ids)}
+        removal_raw = client.remove_users_from_organization(stale_ids, binding["easyai_org_id"]) if SYNC_ENABLED else {"removed": len(stale_ids)}
+        removal_result = _batch_result(removal_raw, stale_ids, "remove")
+        added_raw = client.add_users_to_organization(new_ids, binding["easyai_org_id"]) if SYNC_ENABLED else {"added": len(new_ids)}
+        added_result = _batch_result(added_raw, new_ids, "add")
+        removed_ids = removal_result["success_ids"]
+        added_ids = added_result["success_ids"]
         synced_at = now_ms()
         for item in persisted:
-            if item["easyai_user_id"]:
+            if item["easyai_user_id"] and (str(item["easyai_user_id"]) not in new_ids or str(item["easyai_user_id"]) in added_ids):
                 conn.execute("""INSERT INTO project_easyai_member (project_id, easyai_org_id, easyai_user_id, dashboard_user_id, status, first_synced_at, last_synced_at) VALUES (?, ?, ?, ?, 'active', ?, ?) ON CONFLICT(project_id, easyai_user_id) DO UPDATE SET dashboard_user_id=excluded.dashboard_user_id, status='active', last_synced_at=excluded.last_synced_at""", (project_id, binding["easyai_org_id"], item["easyai_user_id"], item["dashboard_user_id"], synced_at, synced_at))
+        for stale_id in removed_ids:
+            conn.execute("UPDATE project_easyai_member SET status='removed', last_synced_at=? WHERE project_id=? AND easyai_user_id=?", (synced_at, project_id, stale_id))
         unmatched = sum(item["status"] == "unmatched" for item in matches)
         conflicts = sum(item["status"] == "conflict" for item in matches)
-        details = {"members": matches, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "identity_bindings": identity_results, "provider_result": added, "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
+        details = {"members": matches, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "identity_bindings": identity_results, "provider_result": added_result, "removal_result": removal_result, "preserved_fields": ["username", "password", "email", "phone", "history", "balance", "existing_organizations"]}
         details["existing"] = existing_count
-        details["new_ids"] = new_ids
-        conn.execute("UPDATE sync_run SET status='succeeded', finished_at=?, added_count=?, existing_count=?, unmatched_count=?, conflict_count=?, details=? WHERE id=?", (now_ms(), len(new_ids), existing_count, unmatched, conflicts, json.dumps(details, ensure_ascii=False), run_id))
+        details["new_ids"] = added_ids
+        details["removed_ids"] = removed_ids
+        partial_error = bool(added_result["partial"] or removal_result["partial"])
+        if partial_error:
+            details["partial_failure"] = True
+        conn.execute("UPDATE sync_run SET status=?, finished_at=?, added_count=?, existing_count=?, removed_count=?, unmatched_count=?, conflict_count=?, error_count=?, details=? WHERE id=?", ('failed' if partial_error else 'succeeded', now_ms(), len(added_ids), existing_count, len(removed_ids), unmatched, conflicts, 1 if partial_error else 0, json.dumps(details, ensure_ascii=False), run_id))
         conn.execute("UPDATE project_easyai_binding SET last_sync_at=?, last_error='', updated_at=datetime('now') WHERE project_id=?", (now_ms(), project_id))
-        conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, affected_user_ids, result, created_at) VALUES (?, ?, ?, 'project_sync', ?, ?, 'succeeded', ?)", (str(uuid.uuid4()), operator_id, project_id, binding["easyai_org_id"], json.dumps(matched_ids), now_ms()))
-        return {"success": True, "run_id": run_id, "added": len(new_ids), "existing": existing_count, "unmatched": unmatched, "conflict": conflicts, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "details": details}
+        conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, affected_user_ids, result, created_at) VALUES (?, ?, ?, 'project_sync', ?, ?, ?, ?)", (str(uuid.uuid4()), operator_id, project_id, binding["easyai_org_id"], json.dumps(matched_ids + removed_ids), 'failed' if partial_error else 'succeeded', now_ms()))
+        if partial_error:
+            return {"success": False, "run_id": run_id, "added": len(added_ids), "existing": existing_count, "removed": len(removed_ids), "unmatched": unmatched, "conflict": conflicts, "error": "批量组织成员操作部分失败，可重试失败成员", "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "details": details}
+        return {"success": True, "run_id": run_id, "added": len(added_ids), "existing": existing_count, "removed": len(removed_ids), "unmatched": unmatched, "conflict": conflicts, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real", "details": details}
     except Exception as exc:
         message = redact_error(exc)
         conn.execute("UPDATE sync_run SET status='failed', finished_at=?, error_count=1, details=? WHERE id=?", (now_ms(), json.dumps({"error": message}, ensure_ascii=False), run_id))
         conn.execute("UPDATE project_easyai_binding SET status='error', last_error=?, updated_at=datetime('now') WHERE project_id=?", (message, project_id))
         conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, result, error_code, created_at) VALUES (?, ?, ?, 'project_sync', 'failed', ?, ?)", (str(uuid.uuid4()), operator_id, project_id, message[:120], now_ms()))
         raise
+
+
+def preview_all_projects(conn):
+    """Build a read-only global diff, including orphaned project bindings."""
+    projects = conn.execute("SELECT * FROM projects ORDER BY start_date, id").fetchall()
+    rows = []
+    for project in projects:
+        binding = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project["id"],)).fetchone()
+        item = preview_project(conn, project["id"])
+        item["organization_action"] = "existing" if binding and binding["easyai_org_id"] else "create"
+        item["name_action"] = "unchanged"
+        if binding and binding["organization_name"] != test_org_name(project["name"]):
+            item["name_action"] = "rename"
+        item["parent_action"] = "unchanged"
+        rows.append(item)
+    totals = {key: sum(int(item.get(key, 0) or 0) for item in rows) for key in ("added", "existing", "unmatched", "conflict", "removed")}
+    totals["create_org"] = sum(item.get("organization_action") == "create" for item in rows)
+    totals["rename_org"] = sum(item.get("name_action") == "rename" for item in rows)
+    totals["pending_delete"] = 0
+    return {"projects": rows, "totals": totals, "read_only": True, "provider": SYNC_MODE, "simulated": SYNC_MODE != "real", "write_enabled": SYNC_ENABLED and SYNC_MODE == "real"}
+
+
+def cleanup_deleted_binding(conn, project_id, operator_id="local-admin", client=None):
+    """Clean one deleted project only; callers provide the project lock."""
+    binding = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (str(project_id),)).fetchone()
+    if not binding or binding["status"] == "deleted":
+        return {"project_id": str(project_id), "status": "already_deleted", "removed": 0}
+    if not binding["easyai_org_id"]:
+        conn.execute("UPDATE project_easyai_binding SET status='deleted', last_error='', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
+        return {"project_id": str(project_id), "status": "deleted", "removed": 0, "retryable": False}
+    if not SYNC_ENABLED:
+        conn.execute("UPDATE project_easyai_binding SET status='pending_delete', last_error='同步未启用，等待重试', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
+        return {"project_id": str(project_id), "status": "pending_delete", "removed": 0, "retryable": True}
+    client = client or EasyAIClient(load_easyai_runtime_config(conn))
+    member_ids = [str(row["easyai_user_id"]) for row in conn.execute("SELECT easyai_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (str(project_id),)).fetchall()]
+    if hasattr(client, "validate_owned_organization"):
+        owned = client.validate_owned_organization(binding["easyai_org_id"], binding["parent_org_id"], str(project_id), member_ids, require_empty=False)
+        if owned is None:
+            conn.execute("UPDATE project_easyai_binding SET status='deleted', last_error='', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
+            return {"project_id": str(project_id), "status": "deleted", "removed": 0, "already_deleted": True, "retryable": False}
+    removal = _batch_result(client.remove_users_from_organization(member_ids, binding["easyai_org_id"]), member_ids, "remove")
+    conn.executemany("UPDATE project_easyai_member SET status='removed', last_synced_at=? WHERE project_id=? AND easyai_user_id=?", [(now_ms(), str(project_id), item) for item in removal["success_ids"]])
+    if removal["partial"]:
+        conn.execute("UPDATE project_easyai_binding SET status='pending_delete', last_error='成员移除部分失败，等待重试', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
+        return {"project_id": str(project_id), "status": "failed", "removed": len(removal["success_ids"]), "removal_result": removal, "retryable": True}
+    if hasattr(client, "validate_owned_organization"):
+        client.validate_owned_organization(binding["easyai_org_id"], binding["parent_org_id"], str(project_id), [], require_empty=True)
+    try:
+        deleted = client.delete_organization(binding["easyai_org_id"], binding["parent_org_id"], str(project_id))
+    except Exception as exc:
+        message = redact_error(exc)
+        conn.execute("UPDATE project_easyai_binding SET status='pending_delete', last_error=?, updated_at=datetime('now') WHERE project_id=?", (message, str(project_id)))
+        return {"project_id": str(project_id), "status": "failed", "removed": len(removal["success_ids"]), "error": message, "retryable": True}
+    conn.execute("UPDATE project_easyai_binding SET status='deleted', last_error='', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
+    conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, affected_user_ids, result, created_at) VALUES (?, ?, ?, 'project_delete_cleanup', ?, ?, 'succeeded', ?)", (str(uuid.uuid4()), operator_id, str(project_id), binding["easyai_org_id"], json.dumps(removal["success_ids"]), now_ms()))
+    return {"project_id": str(project_id), "status": "deleted", "removed": len(removal["success_ids"]), "delete_result": deleted, "retryable": False}
+
+
+def sync_all_projects(conn, operator_id="local-admin", coordinator=None):
+    """Synchronize all live projects and mark deleted-project bindings safely."""
+    preview = preview_all_projects(conn)
+    results = []
+    cleanup_results = []
+    client = EasyAIClient(load_easyai_runtime_config(conn)) if SYNC_ENABLED else None
+    project_ids = {str(item["project"]["id"]) for item in preview["projects"]}
+    orphaned = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id NOT IN (SELECT id FROM projects) AND status <> 'deleted'").fetchall()
+    for binding in orphaned:
+        project_id = str(binding["project_id"])
+        try:
+            cleanup_results.append((coordinator or ProjectSyncCoordinator()).run(project_id, lambda project_id=project_id: cleanup_deleted_binding(conn, project_id, operator_id, client)))
+        except Exception as exc:
+            message = redact_error(exc)
+            conn.execute("UPDATE project_easyai_binding SET status='pending_delete', last_error=?, updated_at=datetime('now') WHERE project_id=?", (message, project_id))
+            cleanup_results.append({"project_id": project_id, "status": "failed", "error": message, "retryable": True})
+    for item in preview["projects"]:
+        project = item["project"]
+        project_id = str(project["id"])
+        binding = item.get("binding")
+        if item.get("organization_action") == "pending_delete":
+            conn.execute("UPDATE project_easyai_binding SET status='pending_delete', last_error='项目已删除，线上组织待人工确认清理', updated_at=datetime('now') WHERE project_id=?", (project_id,))
+            conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, result, error_code, created_at) VALUES (?, ?, ?, 'global_sync_pending_delete', ?, 'pending_delete', 'PROJECT_DELETED', ?)", (str(uuid.uuid4()), operator_id, project_id, binding.get("easyai_org_id", "") if binding else "", now_ms()))
+            results.append({"project_id": project_id, "project_name": project.get("name", ""), "status": "pending_delete", "added": 0, "existing": 0, "unmatched": 0, "conflict": 0, "removed": 0})
+            continue
+        try:
+            project_coordinator = coordinator or ProjectSyncCoordinator()
+            result = project_coordinator.run(project_id, lambda: (update_project_binding_name(conn, project_id, project["name"]), sync_project(conn, project_id, "global", operator_id))[1])
+            results.append({"project_id": project_id, "project_name": project["name"], "status": "succeeded" if result.get("success") else "failed", "added": result.get("added", 0), "existing": result.get("existing", 0), "unmatched": result.get("unmatched", 0), "conflict": result.get("conflict", 0), "removed": result.get("removed", 0), "run_id": result.get("run_id"), "error": result.get("error", "")})
+        except Exception as exc:
+            results.append({"project_id": project_id, "project_name": project.get("name", ""), "status": "failed", "error": redact_error(exc), "added": 0, "existing": 0, "unmatched": 0, "conflict": 0, "removed": 0})
+    totals = {key: sum(int(item.get(key, 0) or 0) for item in results) for key in ("added", "existing", "unmatched", "conflict", "removed")}
+    totals["failed"] = sum(item["status"] == "failed" for item in results)
+    totals["pending_delete"] = sum(item["status"] == "pending_delete" for item in cleanup_results)
+    run_id = str(uuid.uuid4())
+    cleanup_failed = any(item.get("status") == "failed" for item in cleanup_results)
+    global_failed = totals["failed"] > 0 or cleanup_failed
+    conn.execute("INSERT INTO sync_run (id, project_id, trigger, status, started_at, finished_at, added_count, existing_count, unmatched_count, conflict_count, details) VALUES (?, ?, 'global', ?, ?, ?, ?, ?, ?, ?, ?)", (run_id, '__global__', 'failed' if global_failed else 'succeeded', now_ms(), now_ms(), totals['added'], totals['existing'], totals['unmatched'], totals['conflict'], json.dumps({'projects': results, 'cleanup': cleanup_results, 'totals': totals, 'cleanup_failed': cleanup_failed}, ensure_ascii=False)))
+    return {"success": not global_failed, "run_id": run_id, "projects": results, "cleanup": cleanup_results, "totals": totals}

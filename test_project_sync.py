@@ -8,7 +8,7 @@ from pathlib import Path
 os.environ.setdefault("EASYAI_SYNC_MODE", "mock")
 os.environ.setdefault("EASYAI_SYNC_ENABLED", "true")
 
-from project_sync import EasyAIClient, encrypt_secret, ensure_tables, ensure_binding, iter_organizations, load_easyai_runtime_config, match_identities, normalize_name, organization_id, persist_identity_matches, preview_project, redact_error, sync_project, test_org_name
+from project_sync import EasyAIClient, ProjectSyncCoordinator, _batch_result, encrypt_secret, ensure_tables, ensure_binding, identity_inventory_preview, iter_organizations, load_easyai_runtime_config, match_identities, normalize_name, organization_id, persist_identity_matches, preview_all_projects, preview_project, project_members, refresh_identity_inventory, redact_error, sync_all_projects, sync_project, test_org_name
 
 
 class ProjectSyncUnitTests(unittest.TestCase):
@@ -31,13 +31,33 @@ class ProjectSyncUnitTests(unittest.TestCase):
 
     def test_test_org_name_is_idempotent(self):
         first = test_org_name("演示项目")
-        self.assertTrue(first.startswith("[TEST][dashboard-local]"))
+        self.assertEqual(first, "演示项目")
         self.assertEqual(test_org_name(first), first)
+
+    def test_expired_assignments_are_not_project_members(self):
+        self.conn.execute("INSERT INTO projects (id, name, start_date, end_date) VALUES ('project-1', '演示', '2026-01-01', '2026-12-31')")
+        self.conn.execute("INSERT INTO persons (id, name) VALUES ('person-1', '张三')")
+        self.conn.execute("INSERT INTO assignments (id, person_id, project_id, start_date, end_date) VALUES ('assignment-1', 'person-1', 'project-1', '2020-01-01', '2020-01-02')")
+        self.assertEqual(project_members(self.conn, 'project-1'), [])
 
     def test_redact_error_removes_secret_values(self):
         message = redact_error("api_key=sk-1234567890abcdef token=abc")
         self.assertNotIn("1234567890abcdef", message)
         self.assertIn("[REDACTED]", message)
+
+    def test_batch_result_preserves_partial_success(self):
+        result = _batch_result({'success_ids': ['u1'], 'failed_ids': ['u2']}, ['u1', 'u2'], 'remove')
+        self.assertEqual(result['success_ids'], ['u1'])
+        self.assertEqual(result['failed_ids'], ['u2'])
+        self.assertTrue(result['partial'])
+
+    def test_delete_guard_requires_dashboard_parent_and_description(self):
+        client = EasyAIClient()
+        client._mock_orgs['org-1'] = {'_id': 'org-1', 'name': '项目', 'parent': 'parent-1', 'description': 'dashboard project p1'}
+        self.assertTrue(client.delete_organization('org-1', 'parent-1', 'p1')['deleted'])
+        client._mock_orgs['org-2'] = {'_id': 'org-2', 'name': '外部', 'parent': 'parent-1', 'description': 'other'}
+        with self.assertRaisesRegex(RuntimeError, '不匹配'):
+            client.delete_organization('org-2', 'parent-1', 'p2')
 
     def test_matching_uses_dingtalk_ids_and_does_not_fallback_to_name(self):
         members = [
@@ -77,6 +97,21 @@ class ProjectSyncUnitTests(unittest.TestCase):
         result = match_identities(self.conn, members, [{'id': 'easy-1', 'dingtalk_user_id': 'ding-1'}])[0]
         self.assertEqual(result['easyai_user_id'], 'easy-1')
         self.assertTrue(result['name_changed'])
+
+    def test_refresh_identity_inventory_persists_full_review(self):
+        self.conn.execute("INSERT INTO persons (id, name, ding_id, dingtalk_union_id) VALUES ('person-1', '张三', 'ding-1', 'union-1')")
+        self.conn.execute("INSERT INTO persons (id, name, ding_id, dingtalk_union_id) VALUES ('person-2', '李四', '', '')")
+        rows = refresh_identity_inventory(self.conn, [{'id': 'easy-1', 'username': 'dingtalk_ding-1'}, {'id': 'easy-2', 'name': '李四'}])
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM external_user_identity").fetchone()[0], 2)
+        self.assertEqual(self.conn.execute("SELECT match_status FROM external_user_identity WHERE dashboard_user_id='person-1'").fetchone()[0], 'auto_matched')
+        self.assertEqual(self.conn.execute("SELECT match_status FROM external_user_identity WHERE dashboard_user_id='person-2'").fetchone()[0], 'candidate')
+
+    def test_identity_inventory_preview_is_read_only(self):
+        self.conn.execute("INSERT INTO persons (id, name, ding_id, dingtalk_union_id) VALUES ('person-1', '张三', 'ding-1', 'union-1')")
+        rows = identity_inventory_preview(self.conn, [{'id': 'easy-1', 'username': 'dingtalk_ding-1'}])
+        self.assertEqual(rows[0]['status'], 'auto_matched')
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM external_user_identity").fetchone()[0], 0)
 
     def test_persist_rejects_duplicate_easyai_identity(self):
         matches = [
@@ -166,12 +201,51 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.assertEqual(preview_after['added'], 0)
         self.assertEqual(preview_after['existing'], 1)
         repeat = sync_project(self.conn, 'p-sync')
-        self.assertTrue(repeat['idempotent'])
-        self.assertEqual(repeat['added'], 1)
+        self.assertFalse(repeat.get('idempotent', False))
+        self.assertEqual(repeat['added'], 0)
 
     def test_sync_run_schema_has_existing_count(self):
         columns = {row[1] for row in self.conn.execute("PRAGMA table_info(sync_run)").fetchall()}
         self.assertIn('existing_count', columns)
+
+    def test_global_preview_excludes_orphan_from_current_diff(self):
+        self.conn.execute("INSERT INTO projects (id, name, start_date, end_date) VALUES ('p-live', '在线项目', '', '')")
+        self.conn.execute("INSERT INTO project_easyai_binding (project_id, easyai_org_id, parent_org_id, organization_name, status) VALUES ('p-live', 'org-live', 'parent', '[TEST][dashboard-local] 在线项目', 'active')")
+        self.conn.execute("INSERT INTO project_easyai_binding (project_id, easyai_org_id, parent_org_id, organization_name, status) VALUES ('p-deleted', 'org-deleted', 'parent', '[TEST][dashboard-local] 已删除项目', 'active')")
+        result = preview_all_projects(self.conn)
+        self.assertEqual([item['project']['id'] for item in result['projects']], ['p-live'])
+        self.assertEqual(result['totals']['pending_delete'], 0)
+
+    def test_project_sync_coordinator_skips_overlapping_project(self):
+        coordinator = ProjectSyncCoordinator()
+        lock = coordinator._locks['project-1']
+        lock.acquire()
+        try:
+            result = coordinator.run('project-1', lambda: {'success': True})
+            self.assertTrue(result['skipped'])
+            self.assertEqual(result['reason'], 'already_running')
+        finally:
+            lock.release()
+
+    def test_project_sync_coordinator_releases_lock_after_failure(self):
+        coordinator = ProjectSyncCoordinator()
+        with self.assertRaisesRegex(RuntimeError, 'boom'):
+            coordinator.run('project-1', lambda: (_ for _ in ()).throw(RuntimeError('boom')))
+        result = coordinator.run('project-1', lambda: {'success': True})
+        self.assertEqual(result, {'success': True})
+
+    def test_failed_sync_run_is_recorded_for_retry_diagnostics(self):
+        self.conn.execute("INSERT INTO projects (id, name, start_date, end_date) VALUES ('p-fail', '失败项目', '', '')")
+        self.conn.execute("INSERT INTO project_easyai_binding (project_id, easyai_org_id, parent_org_id, organization_name, status) VALUES ('p-fail', 'org-1', 'parent-1', '[TEST][dashboard-local] 失败项目', 'active')")
+        failing = EasyAIClient()
+        failing.list_users = lambda: (_ for _ in ()).throw(RuntimeError('api_key=secret-value'))
+        with patch('project_sync.EasyAIClient', return_value=failing):
+            with self.assertRaises(RuntimeError):
+                sync_project(self.conn, 'p-fail', 'scheduler', 'scheduler')
+        row = self.conn.execute("SELECT status, error_count, details FROM sync_run WHERE project_id='p-fail'").fetchone()
+        self.assertEqual(row['status'], 'failed')
+        self.assertEqual(row['error_count'], 1)
+        self.assertNotIn('secret-value', row['details'])
 
     def test_admin_page_has_independent_login_save_control(self):
         html = Path(__file__).with_name("static").joinpath("admin.html").read_text(encoding="utf-8")
@@ -186,6 +260,42 @@ class ProjectSyncUnitTests(unittest.TestCase):
         app_source = Path(__file__).with_name("app.py").read_text(encoding="utf-8")
         self.assertNotIn("result['easyai_admin_password_masked']", app_source)
         self.assertIn("JWT 已过期或无效", app_source)
+
+    def test_export_filters_sensitive_config_keys(self):
+        app_source = Path(__file__).with_name("app.py").read_text(encoding="utf-8")
+        self.assertIn("sensitive = ('password', 'secret', 'token', 'api_key'", app_source)
+        self.assertIn("if not any(part in str(c['key']).lower() for part in sensitive)", app_source)
+
+    def test_global_sync_result_render_and_delete_feedback_contract(self):
+        js = Path(__file__).with_name("static").joinpath("admin.js").read_text(encoding="utf-8")
+        self.assertIn("item.project_id, name: item.project_name", js)
+        self.assertIn("item.organization_name || item.org_name", js)
+        self.assertIn("本地已删除，但组织清理失败或待重试", js)
+        self.assertIn("actionConfirmBtn.disabled = true", js)
+        self.assertNotIn('if (!confirm("确定删除此项目及其全部分配吗？")) return;', js)
+
+    def test_json_export_is_downloaded_without_navigation(self):
+        app_source = Path(__file__).with_name("app.py").read_text(encoding="utf-8")
+        js = Path(__file__).with_name("static").joinpath("admin.js").read_text(encoding="utf-8")
+        self.assertIn('Content-Disposition"] = \'attachment; filename="dashboard-export.json"\'', app_source)
+        self.assertIn('byId("exportJsonBtn").addEventListener("click", downloadJsonExport)', js)
+        self.assertIn('frame.src = "api/export"', js)
+        self.assertIn('JSON 导出已开始下载', js)
+        self.assertNotIn('URL.revokeObjectURL(url)', js)
+        self.assertNotIn('location.href = "api/export"', js)
+
+    def test_person_delete_uses_in_page_confirmation(self):
+        js = Path(__file__).with_name("static").joinpath("admin.js").read_text(encoding="utf-8")
+        self.assertIn('async function deletePerson(id)', js)
+        self.assertIn('openActionConfirm("确认删除人员"', js)
+        self.assertNotIn('if (!confirm("确定删除此人员及其全部分配吗？")) return;', js)
+
+    def test_person_sync_preserves_visibility_and_union_id(self):
+        app_source = Path(__file__).with_name("app.py").read_text(encoding="utf-8")
+        js = Path(__file__).with_name("static").joinpath("admin.js").read_text(encoding="utf-8")
+        self.assertIn("dingtalk_union_id = COALESCE(?, dingtalk_union_id)", app_source)
+        self.assertIn("selected = COALESCE(?, selected)", app_source)
+        self.assertIn("unionId: user.unionId || user.dingtalkUnionId || existing?.dingtalk_union_id || \"\"", js)
 
 
 if __name__ == "__main__":

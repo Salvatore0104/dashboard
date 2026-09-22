@@ -38,6 +38,7 @@ html,
 body {
   margin: 0;
   min-height: 100%;
+  overflow-x: hidden;
 }
 
 body {
@@ -149,6 +150,7 @@ a {
 
 .main {
   width: min(1800px, 100%);
+  min-width: 0;
   margin: 0 auto;
   padding: 18px 24px 28px;
 }
@@ -372,6 +374,22 @@ a {
   gap: 10px;
 }
 
+/* 人员池按工作属性分成三条横向带；部门卡片和人员芯片都可在窄屏自动换行。 */
+.dept-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.dept-row .dept-group {
+  flex: 1 1 280px;
+  min-width: min(280px, 100%);
+}
+
+.dept-row-1 .dept-group:first-child { flex: 1 1 calc(33.333% - 10px); }
+.dept-row-1 .dept-group:last-child { flex: 2 1 calc(66.667% - 10px); }
+
 .dept-group {
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
@@ -432,6 +450,15 @@ a {
   transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
 }
 
+.board-visibility-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .person-chip:hover,
 .person-chip.selected {
   border-color: var(--primary);
@@ -484,6 +511,9 @@ a {
   border: 1px solid var(--line);
   border-radius: 10px;
   box-shadow: var(--shadow);
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .gantt {
@@ -516,7 +546,7 @@ a {
   padding: 0 12px;
   font-weight: 800;
   position: sticky;
-  top: var(--nav-h);
+  top: 0;
   z-index: 25;
 }
 
@@ -572,7 +602,7 @@ a {
 .gantt-dates {
   display: flex;
   position: sticky;
-  top: var(--nav-h);
+  top: 0;
   z-index: 10;
   cursor: grab;
 }
@@ -1501,6 +1531,12 @@ td.actions {
 
 .modal-body {
   padding: 16px;
+}
+
+.confirm-copy {
+  white-space: pre-line;
+  line-height: 1.65;
+  color: var(--text);
 }
 
 .toast {

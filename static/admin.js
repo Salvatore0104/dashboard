@@ -23,7 +23,10 @@
     selectedColor: CANDY_COLORS[0],
     businessTripProjectId: null,
     syncUsers: [],
-    syncDeptFilter: ""
+    syncDeptFilter: "",
+    globalSyncPreview: null,
+    identityByDingId: new Map(),
+    confirmAction: null
   };
   const els = {};
 
@@ -39,12 +42,15 @@
   function cache() {
     [
       "navTitle", "projectBody", "personList", "leaveRecordList", "projectCount", "personCount", "leaveRecordCount",
-      "projectModal", "businessTripModal", "syncPersonsModal", "leaveModal", "configModal", "toast",
+      "projectModal", "businessTripModal", "syncPersonsModal", "bindingModal", "leaveModal", "configModal", "toast",
+      "globalSyncModal", "globalSyncSummary", "globalSyncBody", "globalSyncPreviewBtn", "globalSyncRunBtn",
+      "globalSyncLogsModal", "globalSyncLogsBody",
+      "actionConfirmModal", "actionConfirmTitle", "actionConfirmBody", "actionConfirmBtn",
       "projectModalTitle", "projectName", "projectStart", "projectEnd", "projectColorPicker",
       "btProjectId", "btProjectName", "projectBusinessTrip", "projectBusinessTripStart", "projectBusinessTripEnd", "businessTripPersons",
       "syncPersonsList", "syncPersonsStatus", "leavePersonName", "leaveType", "leaveStart", "leaveEnd",
       "projectTitle", "defaultAssignDays", "dingAppKey", "dingAppSecret", "dingTestResult",
-      "identityBody", "refreshIdentityBtn",
+      "identityBody", "refreshIdentityBtn", "bindAllIdentityBtn",
       "themePrimary", "deptColorGrid", "statusColorGrid", "tripUpcomingColor", "tripActiveColor", "leaveActiveColor", "leaveUpcomingColor", "conflictColor",
       "easyaiAdminUsername", "easyaiAdminPassword", "easyaiAdminCredentialsStatus", "easyaiTestResult"
     ].forEach((id) => els[id] = document.getElementById(id));
@@ -57,10 +63,23 @@
 
   function bind() {
     byId("addProjectBtn").addEventListener("click", () => openProjectModal());
+    byId("globalSyncBtn").addEventListener("click", openGlobalSyncModal);
+    byId("globalSyncLogsBtn").addEventListener("click", openGlobalSyncLogs);
+    els.globalSyncPreviewBtn.addEventListener("click", previewGlobalSync);
+    els.globalSyncRunBtn.addEventListener("click", runGlobalSync);
+    els.actionConfirmBtn.addEventListener("click", async () => {
+      const action = state.confirmAction;
+      state.confirmAction = null;
+      els.actionConfirmBtn.disabled = true;
+      closeModal("actionConfirmModal");
+      try { if (action) await action(); }
+      finally { els.actionConfirmBtn.disabled = false; }
+    });
     byId("syncPersonsBtn").addEventListener("click", openSyncPersonsModal);
+    byId("bindPersonsBtn").addEventListener("click", openBindingModal);
     byId("configBtn").addEventListener("click", openConfigModal);
     byId("syncLeaveBtn").addEventListener("click", syncLeaveNow);
-    byId("exportJsonBtn").addEventListener("click", () => location.href = "api/export");
+    byId("exportJsonBtn").addEventListener("click", downloadJsonExport);
     byId("exportCsvBtn").addEventListener("click", () => location.href = "api/export/assignments/csv");
     byId("saveProjectBtn").addEventListener("click", saveProject);
     byId("saveBusinessTripBtn").addEventListener("click", saveBusinessTrip);
@@ -72,7 +91,8 @@
     byId("resetConfigBtn").addEventListener("click", resetConfigDefaults);
     byId("testDingTalkBtn").addEventListener("click", testDingTalk);
     byId("testEasyAIKeyBtn").addEventListener("click", testEasyAIConnection);
-    els.refreshIdentityBtn.addEventListener("click", loadIdentities);
+    els.refreshIdentityBtn.addEventListener("click", refreshIdentities);
+    els.bindAllIdentityBtn.addEventListener("click", bindAllIdentities);
     byId("saveEasyAICredentialsBtn").addEventListener("click", saveEasyAICredentials);
     byId("editDingBtn").addEventListener("click", enableDingEdit);
     byId("saveDingBtn").addEventListener("click", saveDingConfig);
@@ -96,6 +116,10 @@
     renderProjects();
     renderPersons();
     renderLeaves();
+  }
+
+  function openBindingModal() {
+    openModal("bindingModal");
     loadIdentities();
   }
 
@@ -103,6 +127,7 @@
     if (!els.identityBody) return;
     try {
       const rows = await fetchJson("api/project-sync/identities");
+      state.identityByDingId = new Map(rows.filter((row) => row.dingtalk_user_id).map((row) => [String(row.dingtalk_user_id), row]));
       if (!rows.length) {
         els.identityBody.innerHTML = `<tr><td colspan="5" class="table-empty">暂无身份记录。先执行项目同步预览或同步钉钉人员。</td></tr>`;
         return;
@@ -123,6 +148,25 @@
     } catch (error) {
       els.identityBody.innerHTML = `<tr><td colspan="5" class="table-empty">${esc(error.message || "读取失败")}</td></tr>`;
     }
+  }
+
+  async function refreshIdentities() {
+    const result = await fetchJson("api/project-sync/identities/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) }).catch((error) => ({ success: false, message: error.message }));
+    if (!result.success) return toast(result.message || "身份盘点失败");
+    toast(`身份盘点完成：已绑定 ${result.matched}，候选 ${result.candidate}，未匹配 ${result.unmatched}，冲突 ${result.conflict}`);
+    await loadIdentities();
+    if (state.syncUsers.length) renderSyncUsers();
+  }
+
+  async function bindAllIdentities() {
+    const preview = await fetchJson("api/project-sync/identities/preview", { method: "POST" }).catch((error) => ({ success: false, message: error.message }));
+    if (!preview.success) return toast(preview.message || "无法生成身份绑定预览");
+    openActionConfirm("确认批量身份绑定", `全量身份绑定预览\n\n共 ${preview.total} 人\n新增可绑定 ${preview.bindable} 人\n已有绑定 ${preview.existingBound ?? (preview.matched - preview.bindable)} 人\n昵称候选 ${preview.candidate} 人\n冲突 ${preview.conflict} 人\n未匹配 ${preview.unmatched} 人\n\n确认后只绑定唯一稳定 ID 匹配，不按昵称误绑，不修改 wowidea 原组织。`, async () => {
+      const result = await fetchJson("api/project-sync/identities/bind-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) }).catch((error) => ({ success: false, message: error.message }));
+      if (!result.success) return toast(result.message || "批量绑定失败");
+      toast(`批量绑定完成：新增绑定 ${result.newBound ?? result.bound}，已有绑定 ${result.existingBound ?? 0}，冲突 ${result.conflict}，未匹配 ${result.unmatched}`);
+      await loadIdentities();
+    });
   }
 
   function applyThemeConfig() {
@@ -161,14 +205,12 @@
         <td class="actions">
           <button class="btn btn-sm" data-edit-project="${esc(p.id)}">${Icons.svg("admin")}编辑</button>
           <button class="btn btn-warning btn-sm" data-trip-project="${esc(p.id)}">${Icons.svg("plane")}出差</button>
-          <button class="btn btn-success btn-sm" data-sync-project="${esc(p.id)}">${Icons.svg("refresh")}同步组织</button>
           <button class="btn btn-danger btn-sm" data-delete-project="${esc(p.id)}">${Icons.svg("trash")}删除</button>
         </td>
       </tr>`;
     }).join("");
     els.projectBody.querySelectorAll("[data-edit-project]").forEach((btn) => btn.addEventListener("click", () => openProjectModal(btn.dataset.editProject)));
     els.projectBody.querySelectorAll("[data-trip-project]").forEach((btn) => btn.addEventListener("click", () => openBusinessTripModal(btn.dataset.tripProject)));
-    els.projectBody.querySelectorAll("[data-sync-project]").forEach((btn) => btn.addEventListener("click", () => syncProjectToEasyAI(btn.dataset.syncProject)));
     els.projectBody.querySelectorAll("[data-delete-project]").forEach((btn) => btn.addEventListener("click", () => deleteProject(btn.dataset.deleteProject)));
     loadProjectSyncStatuses();
   }
@@ -206,6 +248,83 @@
     }
   }
 
+  function openGlobalSyncModal() {
+    els.globalSyncSummary.textContent = "点击“生成预览”读取当前项目组织和成员差异。离开成员将从对应组织移除；符合归属和安全条件的已删除项目组织将执行清理。";
+    els.globalSyncBody.innerHTML = `<tr><td colspan="5" class="table-empty">尚未生成预览</td></tr>`;
+    els.globalSyncRunBtn.disabled = true;
+    openModal("globalSyncModal");
+    previewGlobalSync();
+  }
+
+  function renderGlobalSyncPreview(data) {
+    const totals = data.totals || {};
+    els.globalSyncSummary.textContent = `当前项目 ${data.projects?.length || 0} 个：新增组织 ${totals.create_org || 0}，改名 ${totals.rename_org || 0}，新增成员 ${totals.added || 0}，已存在 ${totals.existing || 0}，待移除成员 ${totals.removed || 0}，未匹配 ${totals.unmatched || 0}，冲突 ${totals.conflict || 0}，待处理清理 ${totals.pending_delete || 0}。`;
+    els.globalSyncBody.innerHTML = (data.projects || []).map((item) => {
+      const p = item.project || { id: item.project_id, name: item.project_name };
+      const orgName = item.binding?.organization_name || item.organization_name || item.org_name;
+      const org = item.organization_action === "create" ? "待创建" : item.organization_action === "pending_delete" ? "项目已删除" : (orgName || "已绑定");
+      const member = `新增 ${item.added || 0} / 已存在 ${item.existing || 0}`;
+      const issues = `冲突 ${item.conflict || 0} / 未匹配 ${item.unmatched || 0}`;
+      const removal = item.organization_action === "pending_delete" ? `项目已删除 · 待清理（成员 ${item.removed || 0}）` : `移除离开成员 ${item.removed || 0} 人`;
+      return `<tr><td>${esc(p.name || p.id)}</td><td>${esc(org)}${item.name_action === "rename" ? " · 待改名" : ""}</td><td>${member}</td><td>${issues}</td><td>${removal}</td></tr>`;
+    }).join("") || `<tr><td colspan="5" class="table-empty">暂无项目</td></tr>`;
+    els.globalSyncRunBtn.disabled = !data.projects?.length;
+  }
+
+  async function previewGlobalSync() {
+    els.globalSyncPreviewBtn.disabled = true;
+    try {
+      const data = await fetchJson("api/project-sync/global/preview", { method: "POST" });
+      if (!data.success) throw new Error(data.message || "生成预览失败");
+      state.globalSyncPreview = data;
+      renderGlobalSyncPreview(data);
+    } catch (error) {
+      els.globalSyncSummary.textContent = error.message || "生成预览失败";
+      els.globalSyncRunBtn.disabled = true;
+    } finally {
+      els.globalSyncPreviewBtn.disabled = false;
+    }
+  }
+
+  async function runGlobalSync() {
+    if (!state.globalSyncPreview) return previewGlobalSync();
+    const totals = state.globalSyncPreview.totals || {};
+    openActionConfirm("确认执行全局同步", `确认执行全局同步？\n\n新增组织 ${totals.create_org || 0}，新增成员 ${totals.added || 0}，将移除成员 ${totals.removed || 0}，待处理清理 ${totals.pending_delete || 0}。\n\n系统会按归属和安全校验执行成员移除及符合条件的组织清理。`, async () => {
+      els.globalSyncRunBtn.disabled = true;
+      try {
+        const result = await fetchJson("api/project-sync/global/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operatorId: "local-admin" }) });
+        if (!result.success) throw new Error(result.message || "全局同步失败");
+        const t = result.totals || {};
+        toast(`全局同步完成：新增成员 ${t.added || 0}，移除成员 ${t.removed || 0}，失败项目 ${t.failed || 0}，待处理清理 ${t.pending_delete || 0}`);
+        renderGlobalSyncPreview({ projects: result.projects, totals: t });
+        await loadAll();
+      } catch (error) { toast(error.message || "全局同步失败"); }
+      finally { els.globalSyncRunBtn.disabled = false; }
+    });
+  }
+
+  function openActionConfirm(title, body, action) {
+    state.confirmAction = action;
+    els.actionConfirmTitle.textContent = title;
+    els.actionConfirmBody.textContent = body;
+    openModal("actionConfirmModal");
+  }
+
+  async function openGlobalSyncLogs() {
+    els.globalSyncLogsBody.innerHTML = `<tr><td colspan="8" class="table-empty">读取中</td></tr>`;
+    openModal("globalSyncLogsModal");
+    try {
+      const rows = await fetchJson("api/project-sync/global/logs");
+      els.globalSyncLogsBody.innerHTML = rows.length ? rows.map((row) => {
+        const t = row.totals || {};
+        const time = row.started_at ? new Date(Number(row.started_at)).toLocaleString() : "-";
+        return `<tr><td>${esc(time)}</td><td>${esc(row.status || "-")}</td><td>${t.added ?? row.added_count ?? 0}</td><td>${t.existing ?? row.existing_count ?? 0}</td><td>${t.removed ?? row.removed_count ?? 0}</td><td>${t.unmatched ?? row.unmatched_count ?? 0}</td><td>${t.conflict ?? row.conflict_count ?? 0}</td><td>${t.pending_delete ?? 0}</td></tr>`;
+      }).join("") : `<tr><td colspan="8" class="table-empty">暂无全局同步日志</td></tr>`;
+    } catch (error) {
+      els.globalSyncLogsBody.innerHTML = `<tr><td colspan="7" class="table-empty">${esc(error.message || "读取失败")}</td></tr>`;
+    }
+  }
+
   function renderPersons() {
     els.personCount.textContent = `${state.persons.length} 人`;
     if (!state.persons.length) {
@@ -224,6 +343,24 @@
       </section>`).join("");
     els.personList.querySelectorAll("[data-leave-person]").forEach((btn) => btn.addEventListener("click", () => openLeaveModal(btn.dataset.leavePerson)));
     els.personList.querySelectorAll("[data-delete-person]").forEach((btn) => btn.addEventListener("click", () => deletePerson(btn.dataset.deletePerson)));
+    els.personList.querySelectorAll("[data-toggle-board]").forEach((input) => input.addEventListener("change", () => togglePersonOnBoard(input.dataset.toggleBoard, input.checked)));
+  }
+
+  async function togglePersonOnBoard(personId, visible) {
+    const person = state.persons.find((item) => String(item.id) === String(personId));
+    if (!person) return;
+    try {
+      const response = await fetch(`api/persons/${encodeURIComponent(personId)}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: person.name, groupType: person.group_type, avatar: person.avatar || "", dingId: person.ding_id || "", unionId: person.dingtalk_union_id || "", department: person.department || "", selected: visible, sortOrder: person.sort_order || 0, leaveStatus: person.leave_status || "", leaveStart: person.leave_start || "", leaveEnd: person.leave_end || "", leaveType: person.leave_type || "" })
+      });
+      if (!response.ok) throw new Error("保存失败");
+      person.selected = visible ? 1 : 0;
+      toast(visible ? "已显示在前台看板" : "已从前台看板隐藏");
+    } catch (error) {
+      toast(error.message || "显示设置保存失败");
+      renderPersons();
+    }
   }
 
   // 获取人员出差状态：出差中（今天在区间内）> 即将出差（今天还没到开始日期）
@@ -309,6 +446,7 @@
         <small>${esc(groupLabel)}</small>
       </span>
       ${statusTag}
+      <label class="board-visibility-toggle"><input type="checkbox" data-toggle-board="${esc(person.id)}" ${person.selected !== 0 && person.selected !== false ? "checked" : ""}>前台显示</label>
       <button class="btn btn-warning btn-sm" data-leave-person="${esc(person.id)}">请假</button>
       <button class="btn btn-danger btn-sm" data-delete-person="${esc(person.id)}">删除</button>
     </article>`;
@@ -375,10 +513,14 @@
       color: state.selectedColor
     };
     const url = state.editingProjectId ? `api/projects/${encodeURIComponent(state.editingProjectId)}` : "api/projects";
-    await fetch(url, { method: state.editingProjectId ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    try {
+      const result = await fetchJson(url, { method: state.editingProjectId ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!result.success) throw new Error(result.message || result.syncError || "项目保存失败");
+      if (result.syncError) toast(`项目已保存，但组织同步待重试：${result.syncError}`);
+      else toast("项目已保存");
+    } catch (error) { return toast(error.message || "项目保存失败"); }
     closeModal("projectModal");
     await loadAll();
-    toast("项目已保存");
   }
 
   function openBusinessTripModal(id) {
@@ -395,14 +537,15 @@
   }
 
   function currentTripProject() {
-    return state.projects.find((p) => String(p.id) === String(state.businessTripProjectId || els.btProjectId?.value));
+    const selectedId = state.businessTripProjectId || els.btProjectId?.value;
+    return state.projects.find((p) => String(p.id ?? p.project_id) === String(selectedId));
   }
 
   function renderBusinessTripPersonPicker(project) {
     const enabled = els.projectBusinessTrip.checked;
     els.businessTripPersons.style.display = enabled ? "grid" : "none";
     if (!enabled) return;
-    const selected = new Set(parseJsonArray(project?.business_trip_persons).map(String));
+    const selected = new Set(parseJsonArray(project?.business_trip_persons ?? project?.businessTripPersons).map(String));
     els.businessTripPersons.innerHTML = state.persons.map((p) => `<label class="person-check"><input type="checkbox" value="${esc(p.id)}" ${selected.has(String(p.id)) ? "checked" : ""}><span class="person-dot" style="background:${personColor(p)}">${esc(String(p.name || "?").slice(0, 1))}</span><span>${esc(p.name)}</span></label>`).join("") || `<span class="tag">暂无人员</span>`;
   }
 
@@ -415,24 +558,39 @@
       businessTripEnd: els.projectBusinessTripEnd.value,
       businessTripPersons: [...els.businessTripPersons.querySelectorAll("input:checked")].map((input) => input.value)
     };
-    await fetch(`api/projects/${encodeURIComponent(project.id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    try {
+      const result = await fetchJson(`api/projects/${encodeURIComponent(project.id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!result.success) throw new Error(result.message || "出差信息保存失败");
+    } catch (error) { return toast(error.message || "出差信息保存失败"); }
     closeModal("businessTripModal");
     await loadAll();
     toast("出差信息已保存");
   }
 
   async function deleteProject(id) {
-    if (!confirm("确定删除此项目及其全部分配吗？")) return;
-    await fetch(`api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
-    await loadAll();
-    toast("项目已删除");
+    const project = state.projects.find((item) => String(item.id) === String(id));
+    openActionConfirm("确认删除项目", `将删除项目“${project?.name || id}”及其本地分配。\n\n系统会尝试清理对应的 Dashboard 组织；若组织清理失败，本地删除仍会完成，但会明确标记待重试。`, async () => {
+      try {
+        const result = await fetchJson(`api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
+        if (!result.success) throw new Error(result.message || "项目删除失败");
+        await loadAll();
+        const sync = result.sync || {};
+        if (sync.success === false || sync.retryable) return toast(`项目本地已删除，但组织清理失败或待重试：${sync.error || sync.cleanup?.error || "请执行全局同步重试"}`);
+        toast("项目及对应组织清理已完成");
+      } catch (error) { toast(error.message || "项目删除失败"); }
+    });
   }
 
   async function deletePerson(id) {
-    if (!confirm("确定删除此人员及其全部分配吗？")) return;
-    await fetch(`api/persons/${encodeURIComponent(id)}`, { method: "DELETE" });
-    await loadAll();
-    toast("人员已删除");
+    const person = state.persons.find((item) => String(item.id) === String(id));
+    openActionConfirm("确认删除人员", `将删除人员“${person?.name || id}”及其全部本地分配。\n\n请确认后继续。`, async () => {
+      try {
+        const result = await fetchJson(`api/persons/${encodeURIComponent(id)}`, { method: "DELETE" });
+        if (!result.success) throw new Error(result.message || "人员删除失败");
+        await loadAll();
+        toast("人员已删除");
+      } catch (error) { toast(error.message || "人员删除失败"); }
+    });
   }
 
   function openLeaveModal(id) {
@@ -447,14 +605,20 @@
   }
 
   async function saveLeave() {
-    await fetch("api/leave/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ personId: state.editingLeavePersonId, leaveStatus: els.leaveType.value, leaveType: els.leaveType.value, leaveStart: els.leaveStart.value, leaveEnd: els.leaveEnd.value }) });
+    try {
+      const result = await fetchJson("api/leave/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ personId: state.editingLeavePersonId, leaveStatus: els.leaveType.value, leaveType: els.leaveType.value, leaveStart: els.leaveStart.value, leaveEnd: els.leaveEnd.value }) });
+      if (!result.success) throw new Error(result.message || "请假记录保存失败");
+    } catch (error) { return toast(error.message || "请假记录保存失败"); }
     closeModal("leaveModal");
     await loadAll();
     toast("请假记录已保存");
   }
 
   async function clearLeave() {
-    await fetch("api/leave/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ personId: state.editingLeavePersonId, leaveStatus: "", leaveType: "", leaveStart: "", leaveEnd: "" }) });
+    try {
+      const result = await fetchJson("api/leave/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ personId: state.editingLeavePersonId, leaveStatus: "", leaveType: "", leaveStart: "", leaveEnd: "" }) });
+      if (!result.success) throw new Error(result.message || "请假状态清空失败");
+    } catch (error) { return toast(error.message || "请假状态清空失败"); }
     closeModal("leaveModal");
     await loadAll();
     toast("请假状态已清空");
@@ -710,6 +874,7 @@
       return toast(data.message || "获取钉钉人员失败");
     }
     state.syncUsers = Array.isArray(data.data) ? data.data : [];
+    await refreshIdentities();
     // 保存到 sessionStorage，刷新页面后可恢复
     try {
       sessionStorage.setItem("dingtalk_sync_users", JSON.stringify(state.syncUsers));
@@ -746,7 +911,6 @@
         <input type="checkbox" value="${esc(id)}" ${existing ? "disabled" : ""}>
         <span class="person-dot" style="background:${personColor({ department: user.department || "", group_type: inferGroupType(user.department || user.title || "") })}">${esc(String(user.name || "?").slice(0, 1))}</span>
         <span class="person-main"><strong>${esc(user.name || "未命名")}</strong><small>${esc(user.department || "未分组")}</small></span>
-        ${existing ? '<span class="tag">已存在</span>' : '<span class="tag tag-primary">新人员</span>'}
       </label>`;
     };
 
@@ -834,6 +998,7 @@
     // 逐个同步，避免 SQLite 并发锁问题
     for (const user of users) {
       try {
+        const existing = state.persons.find((person) => String(person.id) === String(user.id || user.dingId));
         const res = await fetchJson("api/persons", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -842,9 +1007,9 @@
             dingId: user.dingId || user.id,
             name: user.name,
             avatar: user.avatar || "",
+            unionId: user.unionId || user.dingtalkUnionId || existing?.dingtalk_union_id || "",
             department: user.department || "",
-            groupType: inferGroupType(user.department || user.title || ""),
-            selected: true
+            groupType: inferGroupType(user.department || user.title || "")
           })
         });
         if (res.success) successCount++;
@@ -887,6 +1052,18 @@
   }
   function closeModal(id) {
     byId(id).classList.remove("open");
+    if (id === "actionConfirmModal") state.confirmAction = null;
+  }
+
+  async function downloadJsonExport() {
+    try {
+      const frame = document.createElement("iframe");
+      frame.hidden = true;
+      frame.src = "api/export";
+      document.body.appendChild(frame);
+      window.setTimeout(() => frame.remove(), 60000);
+      toast("JSON 导出已开始下载");
+    } catch (error) { toast(error.message || "JSON 导出失败"); }
   }
   function toast(message) {
     els.toast.textContent = message;
@@ -919,8 +1096,12 @@
   }
   function fetchJson(url, options) {
     return fetch(url, options).then((response) => {
-      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-      return response.json();
+      return response.text().then((text) => {
+        let body = {};
+        try { body = text ? JSON.parse(text) : {}; } catch (_) { body = {}; }
+        if (!response.ok) throw new Error(body.message || `${response.status} ${response.statusText}`);
+        return body;
+      });
     });
   }
   function todayStr(add = 0) {
