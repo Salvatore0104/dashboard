@@ -1369,14 +1369,14 @@
           toDelete.push(item.id);
         }
       }
-      await Promise.all(toDelete.map((id) => fetch(`api/assignments/${encodeURIComponent(id)}`, { method: "DELETE" })));
+      await Promise.all(toDelete.map((id) => fetch(`api/assignments/${encodeURIComponent(id)}`, { method: "DELETE" }).then(readAssignmentMutation)));
       this.state.assignments = this.state.assignments.filter((a) => !toDelete.some((id) => String(id) === String(a.id)));
       if (editingId) {
         await fetch(`api/assignments/${encodeURIComponent(editingId)}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ startDate: dateStr(mergedStart), endDate: dateStr(mergedEnd) })
-        });
+        }).then(readAssignmentMutation);
         const existing = this.state.assignments.find((a) => String(a.id) === String(editingId));
         if (existing) {
           existing.start_date = dateStr(mergedStart);
@@ -1389,7 +1389,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId, personId, startDate: dateStr(mergedStart), endDate: dateStr(mergedEnd) })
       });
-      const result = await response.json().catch(() => ({}));
+      const result = await readAssignmentMutation(response);
       this.state.assignments.push({
         id: result.id || `local-${Date.now()}`,
         project_id: projectId,
@@ -1425,6 +1425,15 @@
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
       return response.json();
     });
+  }
+
+  async function readAssignmentMutation(response) {
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || body.success === false) throw new Error(body.message || `${response.status} ${response.statusText}`);
+    if (body.sync && body.sync.success === false) {
+      window.alert(`本地分配已保存，但项目组织同步失败：${body.sync.error || "请稍后重试"}`);
+    }
+    return body;
   }
 
   function parsePersonIds(dataTransfer) {

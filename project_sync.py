@@ -298,24 +298,15 @@ class EasyAIClient:
 
     def delete_organization(self, org_id, parent_id, external_id):
         """Delete only an organization proven to be a Dashboard-owned binding."""
-        org = next((item for item in iter_organizations(self.list_organizations()) if organization_id(item) == str(org_id)), None)
+        org = self.validate_owned_organization(org_id, parent_id, external_id, require_empty=True)
         if not org:
-            raise RuntimeError("待删除组织不存在")
-        actual_parent = str(org.get("parent") or org.get("parent_id") or org.get("parentId") or "")
-        description = str(org.get("description") or "")
-        child_nodes = org.get("children") or []
-        member_count = org.get("member_count", org.get("members_count", org.get("user_count", 0))) or 0
-        balance = org.get("balance", 0) or 0
-        if child_nodes or int(member_count or 0) > 0 or float(balance or 0) > 0:
-            raise RuntimeError("组织仍有子组织、成员或余额，拒绝删除")
-        if actual_parent != str(parent_id) or description != f"dashboard project {external_id}":
-            raise RuntimeError("组织归属或 Dashboard 标记不匹配，拒绝删除")
+            return {"deleted": True, "already_deleted": True, "id": str(org_id)}
         if self.mode == "mock":
             for key, value in list(self._mock_orgs.items()):
                 if organization_id(value) == str(org_id):
                     del self._mock_orgs[key]
                     return {"deleted": True, "id": str(org_id)}
-            raise RuntimeError("待删除组织不存在")
+            return {"deleted": True, "already_deleted": True, "id": str(org_id)}
         try:
             data = self._request("DELETE", f"/organization/{org_id}")
         except RuntimeError as exc:
@@ -323,6 +314,27 @@ class EasyAIClient:
                 return {"deleted": True, "already_deleted": True, "id": str(org_id)}
             raise
         return data.get("data", data) if isinstance(data, dict) else data
+
+    def validate_owned_organization(self, org_id, parent_id, external_id, managed_user_ids=None, require_empty=False):
+        org = next((item for item in iter_organizations(self.list_organizations()) if organization_id(item) == str(org_id)), None)
+        if not org:
+            return None
+        actual_parent = str(org.get("parent") or org.get("parent_id") or org.get("parentId") or "")
+        description = str(org.get("description") or "")
+        child_nodes = org.get("children") or []
+        member_count = org.get("userCount", 0) or 0
+        users = org.get("users") or []
+        user_ids = {str(item.get("id") or item.get("_id") or item.get("user_id") or item.get("userId")) if isinstance(item, dict) else str(item) for item in users}
+        balance = org.get("balance", 0) or 0
+        if child_nodes or float(balance or 0) > 0:
+            raise RuntimeError("组织仍有子组织、成员或余额，拒绝删除")
+        if managed_user_ids is not None and not user_ids.issubset({str(item) for item in managed_user_ids}):
+            raise RuntimeError("组织包含非 Dashboard 托管成员，拒绝删除")
+        if require_empty and (int(member_count) > 0 or user_ids):
+            raise RuntimeError("组织移除后仍有成员，拒绝删除")
+        if actual_parent != str(parent_id) or description != f"dashboard project {external_id}":
+            raise RuntimeError("组织归属或 Dashboard 标记不匹配，拒绝删除")
+        return org
 
     def remove_users_from_organization(self, user_ids, org_id):
         user_ids = [str(item) for item in user_ids]
@@ -810,16 +822,26 @@ def cleanup_deleted_binding(conn, project_id, operator_id="local-admin", client=
     binding = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (str(project_id),)).fetchone()
     if not binding or binding["status"] == "deleted":
         return {"project_id": str(project_id), "status": "already_deleted", "removed": 0}
-    if not SYNC_ENABLED or not binding["easyai_org_id"]:
-        conn.execute("UPDATE project_easyai_binding SET status='pending_delete', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
+    if not binding["easyai_org_id"]:
+        conn.execute("UPDATE project_easyai_binding SET status='deleted', last_error='', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
+        return {"project_id": str(project_id), "status": "deleted", "removed": 0, "retryable": False}
+    if not SYNC_ENABLED:
+        conn.execute("UPDATE project_easyai_binding SET status='pending_delete', last_error='同步未启用，等待重试', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
         return {"project_id": str(project_id), "status": "pending_delete", "removed": 0, "retryable": True}
     client = client or EasyAIClient(load_easyai_runtime_config(conn))
     member_ids = [str(row["easyai_user_id"]) for row in conn.execute("SELECT easyai_user_id FROM project_easyai_member WHERE project_id=? AND status='active'", (str(project_id),)).fetchall()]
+    if hasattr(client, "validate_owned_organization"):
+        owned = client.validate_owned_organization(binding["easyai_org_id"], binding["parent_org_id"], str(project_id), member_ids, require_empty=False)
+        if owned is None:
+            conn.execute("UPDATE project_easyai_binding SET status='deleted', last_error='', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
+            return {"project_id": str(project_id), "status": "deleted", "removed": 0, "already_deleted": True, "retryable": False}
     removal = _batch_result(client.remove_users_from_organization(member_ids, binding["easyai_org_id"]), member_ids, "remove")
     conn.executemany("UPDATE project_easyai_member SET status='removed', last_synced_at=? WHERE project_id=? AND easyai_user_id=?", [(now_ms(), str(project_id), item) for item in removal["success_ids"]])
     if removal["partial"]:
         conn.execute("UPDATE project_easyai_binding SET status='pending_delete', last_error='成员移除部分失败，等待重试', updated_at=datetime('now') WHERE project_id=?", (str(project_id),))
         return {"project_id": str(project_id), "status": "failed", "removed": len(removal["success_ids"]), "removal_result": removal, "retryable": True}
+    if hasattr(client, "validate_owned_organization"):
+        client.validate_owned_organization(binding["easyai_org_id"], binding["parent_org_id"], str(project_id), [], require_empty=True)
     try:
         deleted = client.delete_organization(binding["easyai_org_id"], binding["parent_org_id"], str(project_id))
     except Exception as exc:
@@ -866,5 +888,7 @@ def sync_all_projects(conn, operator_id="local-admin", coordinator=None):
     totals["failed"] = sum(item["status"] == "failed" for item in results)
     totals["pending_delete"] = sum(item["status"] == "pending_delete" for item in cleanup_results)
     run_id = str(uuid.uuid4())
-    conn.execute("INSERT INTO sync_run (id, project_id, trigger, status, started_at, finished_at, added_count, existing_count, unmatched_count, conflict_count, details) VALUES (?, ?, 'global', ?, ?, ?, ?, ?, ?, ?, ?)", (run_id, '__global__', 'succeeded' if totals['failed'] == 0 else 'failed', now_ms(), now_ms(), totals['added'], totals['existing'], totals['unmatched'], totals['conflict'], json.dumps({'projects': results, 'totals': totals}, ensure_ascii=False)))
-    return {"success": totals["failed"] == 0 and not any(item.get("status") == "failed" for item in cleanup_results), "run_id": run_id, "projects": results, "cleanup": cleanup_results, "totals": totals}
+    cleanup_failed = any(item.get("status") == "failed" for item in cleanup_results)
+    global_failed = totals["failed"] > 0 or cleanup_failed
+    conn.execute("INSERT INTO sync_run (id, project_id, trigger, status, started_at, finished_at, added_count, existing_count, unmatched_count, conflict_count, details) VALUES (?, ?, 'global', ?, ?, ?, ?, ?, ?, ?, ?)", (run_id, '__global__', 'failed' if global_failed else 'succeeded', now_ms(), now_ms(), totals['added'], totals['existing'], totals['unmatched'], totals['conflict'], json.dumps({'projects': results, 'cleanup': cleanup_results, 'totals': totals, 'cleanup_failed': cleanup_failed}, ensure_ascii=False)))
+    return {"success": not global_failed, "run_id": run_id, "projects": results, "cleanup": cleanup_results, "totals": totals}
