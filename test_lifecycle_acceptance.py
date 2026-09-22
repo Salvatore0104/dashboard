@@ -165,6 +165,47 @@ class LifecycleAcceptanceTests(unittest.TestCase):
         adds = [c[1] for c in self.fake.calls if c[0] == "add" and c[1]]
         self.assertEqual(adds, [["easy-a"], ["easy-a"]])
 
+    def test_scheduler_loop_expires_members_and_continues_after_project_failure(self):
+        self.add_project("p-a")
+        self.add_person_assignment("p-a")
+        sync_project(self.conn, "p-a")
+        self.conn.execute("UPDATE assignments SET end_date=? WHERE project_id='p-a'",
+                          ((date.today() - timedelta(days=1)).isoformat(),))
+        self.add_project("p-b")
+        self.add_person_assignment("p-b", "person-b", "B")
+        self.conn.commit()
+        real_sync = dashboard_app.sync_project
+
+        def fail_first(project_conn, project_id, trigger, operator):
+            if project_id == "p-a":
+                raise RuntimeError("synthetic scheduler failure")
+            return real_sync(project_conn, project_id, trigger, operator)
+
+        # Stop at the next wait: one complete real scheduler loop has executed.
+        with patch.object(dashboard_app.time, "sleep", side_effect=[None, InterruptedError]), \
+             patch.object(dashboard_app, "sync_project", side_effect=fail_first):
+            with self.assertRaises(InterruptedError):
+                dashboard_app.schedule_project_sync()
+        row = self.conn.execute("SELECT status,trigger FROM sync_run WHERE project_id='p-b' ORDER BY started_at DESC LIMIT 1").fetchone()
+        self.assertEqual(tuple(row), ("succeeded", "scheduler"))
+
+        with patch.object(dashboard_app.time, "sleep", side_effect=[None, InterruptedError]) as sleep:
+            with self.assertRaises(InterruptedError):
+                dashboard_app.schedule_project_sync()
+        self.assertEqual(sleep.call_args_list[0].args, (dashboard_app.PROJECT_SYNC_INTERVAL_SECONDS,))
+        row = self.conn.execute("SELECT status FROM project_easyai_member WHERE project_id='p-a'").fetchone()
+        self.assertEqual(row[0], "removed")
+        run = self.conn.execute("SELECT removed_count,trigger FROM sync_run WHERE project_id='p-a' ORDER BY started_at DESC LIMIT 1").fetchone()
+        self.assertEqual(tuple(run), (1, "scheduler"))
+
+    def test_scheduler_disabled_does_not_start_thread(self):
+        with patch.object(dashboard_app, "PROJECT_SYNC_SCHEDULER_ENABLED", False), \
+             patch.object(dashboard_app.threading, "Thread") as thread:
+            dashboard_app.start_project_sync_scheduler()
+            thread.assert_not_called()
+        with patch.dict(os.environ, {"SYNC_INTERVAL_MINUTES": "10"}):
+            self.assertEqual(dashboard_app._project_sync_interval_seconds(), 600)
+
     def test_partial_failure_can_retry_only_failed_members(self):
         self.add_project("p-partial")
         self.add_person_assignment("p-partial", "person-a", "A")
