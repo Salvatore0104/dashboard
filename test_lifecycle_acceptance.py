@@ -168,6 +168,28 @@ class LifecycleAcceptanceTests(unittest.TestCase):
         adds = [c[1] for c in self.fake.calls if c[0] == "add" and c[1]]
         self.assertEqual(adds, [["easy-a"], ["easy-a"]])
 
+    def test_project_expiry_clears_members_but_retains_organization(self):
+        self.add_project("p-a")
+        self.add_person_assignment("p-a", end=(date.today() + timedelta(days=7)).isoformat())
+        self.assertEqual(sync_project(self.conn, "p-a")["added"], 1)
+        self.conn.execute("UPDATE projects SET end_date=? WHERE id='p-a'",
+                          ((date.today() - timedelta(days=1)).isoformat(),))
+        self.conn.commit()
+        preview = project_sync.preview_project(self.conn, "p-a")
+        self.assertEqual(preview["removed"], 1)
+        result = sync_all_projects(self.conn)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["projects"][0]["removed"], 1)
+        self.assertFalse(any(call[0] == "delete_org" for call in self.fake.calls))
+        binding = self.conn.execute("SELECT easyai_org_id,status FROM project_easyai_binding WHERE project_id='p-a'").fetchone()
+        self.assertEqual(tuple(binding), ("org-p-a", "active"))
+        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_member WHERE project_id='p-a'").fetchone()[0], "removed")
+        # Repeated scheduled sync must keep the same empty organization.
+        self.assertEqual(sync_project(self.conn, "p-a", "scheduler")["removed"], 0)
+        self.assertFalse(any(call[0] == "delete_org" for call in self.fake.calls))
+        self.conn.execute("UPDATE projects SET end_date=? WHERE id='p-a'", (self.today,))
+        self.assertEqual(sync_project(self.conn, "p-a")["added"], 1)
+
     def test_scheduler_loop_expires_members_and_continues_after_project_failure(self):
         self.add_project("p-a")
         self.add_person_assignment("p-a")

@@ -477,12 +477,16 @@ def project_members(conn, project_id):
     rows = conn.execute("""
         SELECT DISTINCT p.id, p.name, p.ding_id, COALESCE(p.dingtalk_union_id, '') AS dingtalk_union_id
         FROM assignments a JOIN persons p ON p.id=a.person_id
+        JOIN projects project ON project.id=a.project_id
         WHERE a.project_id=?
+          AND (project.end_date='' OR project.end_date>=?)
           AND (a.start_date='' OR a.start_date<=?)
           AND (a.end_date='' OR a.end_date>=?)
-    """, (project_id, today, today)).fetchall()
+    """, (project_id, today, today, today)).fetchall()
     # An empty active set is meaningful: expired assignments must leave the
     # project organization instead of being re-added by a fallback query.
+    # Project expiry also ends membership even if an assignment extends beyond
+    # the project. Keep the project/binding: expiry never deletes its organization.
     return rows
 
 

@@ -246,11 +246,13 @@
         <button class="btn btn-sm" data-close-modal="configModal" type="button"><span data-icon="close"></span></button>
       </div>
       <div class="modal-body settings-grid">
-        <section class="settings-section">
+        <section class="settings-section settings-wide">
           <h3>基础设置</h3>
+          <div class="settings-basics">
           <div class="field"><label>项目标题</label><input class="input" id="projectTitle" type="text"></div>
           <div class="field"><label>默认分配天数</label><input class="input" id="defaultAssignDays" type="number" min="1" max="30"></div>
           <div class="field"><label>界面主题色</label><input class="input color-input" id="themePrimary" type="color"></div>
+          </div>
         </section>
         <section class="settings-section">
           <h3>钉钉同步</h3>
@@ -297,12 +299,15 @@
           <div class="muted">账号和密码只提交给本地后端加密保存，页面不会回显密码或 JWT。</div>
           </div>
         </section>
-        <section class="settings-section">
+        <section class="settings-section settings-wide">
           <h3>组织自动同步</h3>
+          <div class="settings-schedule">
           <label><input id="projectSyncEnabled" type="checkbox">启用自动同步</label>
           <div class="field"><label for="projectSyncHours">同步周期（小时）</label><input class="input" id="projectSyncHours" type="number" min="1" max="168" step="1" value="1"></div>
           <button class="btn btn-primary" id="saveProjectScheduleBtn" type="button">保存同步设置</button>
+          </div>
           <div class="muted">保存后即时生效，下次执行从保存时间起计算。关闭不影响手动同步。</div>
+          <div class="muted">项目过期后仅清空项目成员，保留 wowidea 项目组织。</div>
         </section>
         <section class="settings-section">
           <h3>部门颜色</h3>
