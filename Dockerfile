@@ -14,9 +14,11 @@ EXPOSE 5000
 
 # 设置环境变量
 ENV DB_PATH=/data/claw/claw.db
+ENV EASYAI_CONFIG_KEY_FILE=/data/claw/.easyai-config.key
 
 # 创建数据目录
 RUN mkdir -p /data/claw
 
 # 启动命令 - 使用外部数据库
-CMD ["python", "app.py"]
+ENTRYPOINT ["python"]
+CMD ["app.py"]

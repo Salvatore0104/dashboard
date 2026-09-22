@@ -13,6 +13,13 @@ __pycache__
 *.pyo
 *.egg-info
 .env
+.env.*
+.easyai-config.key
+*.db
+*.db-*
+*.sqlite*
+*.log
+新建文本文档.txt
 venv/
 .venv/
 
