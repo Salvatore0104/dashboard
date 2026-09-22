@@ -284,6 +284,12 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.assertNotIn('URL.revokeObjectURL(url)', js)
         self.assertNotIn('location.href = "api/export"', js)
 
+    def test_person_delete_uses_in_page_confirmation(self):
+        js = Path(__file__).with_name("static").joinpath("admin.js").read_text(encoding="utf-8")
+        self.assertIn('async function deletePerson(id)', js)
+        self.assertIn('openActionConfirm("确认删除人员"', js)
+        self.assertNotIn('if (!confirm("确定删除此人员及其全部分配吗？")) return;', js)
+
 
 if __name__ == "__main__":
     unittest.main()

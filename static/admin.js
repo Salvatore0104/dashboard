@@ -582,13 +582,15 @@
   }
 
   async function deletePerson(id) {
-    if (!confirm("确定删除此人员及其全部分配吗？")) return;
-    try {
-      const result = await fetchJson(`api/persons/${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (!result.success) throw new Error(result.message || "人员删除失败");
-    } catch (error) { return toast(error.message || "人员删除失败"); }
-    await loadAll();
-    toast("人员已删除");
+    const person = state.persons.find((item) => String(item.id) === String(id));
+    openActionConfirm("确认删除人员", `将删除人员“${person?.name || id}”及其全部本地分配。\n\n请确认后继续。`, async () => {
+      try {
+        const result = await fetchJson(`api/persons/${encodeURIComponent(id)}`, { method: "DELETE" });
+        if (!result.success) throw new Error(result.message || "人员删除失败");
+        await loadAll();
+        toast("人员已删除");
+      } catch (error) { toast(error.message || "人员删除失败"); }
+    });
   }
 
   function openLeaveModal(id) {
