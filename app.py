@@ -1,3 +1,4 @@
+import builtins
 import os
 import sqlite3
 import json
@@ -8,6 +9,12 @@ import uuid
 import hashlib
 import hmac
 from flask import Flask, jsonify, request, send_from_directory, Response, stream_with_context, make_response, g
+
+
+def print(*args, **kwargs):
+    """Flush log lines. Container stdout is block-buffered, so docker logs otherwise stays empty."""
+    kwargs.setdefault("flush", True)
+    builtins.print(*args, **kwargs)
 from access_control import install_access_control
 import requests
 from dotenv import load_dotenv

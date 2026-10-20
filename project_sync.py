@@ -3,6 +3,7 @@
 The adapter defaults to mock mode. Real EasyAI writes require an explicit
 EASYAI_SYNC_MODE=real setting and credentials supplied through the environment.
 """
+import builtins
 import hashlib
 import json
 import os
@@ -14,6 +15,12 @@ from collections import Counter, defaultdict
 
 import requests
 from cryptography.fernet import Fernet, InvalidToken
+
+
+def print(*args, **kwargs):
+    """Flush log lines. Container stdout is block-buffered, so docker logs otherwise stays empty."""
+    kwargs.setdefault("flush", True)
+    builtins.print(*args, **kwargs)
 
 
 TEST_PREFIX = os.getenv("EASYAI_TEST_ORG_PREFIX", "[TEST][dashboard-local]").strip()

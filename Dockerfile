@@ -16,6 +16,8 @@ EXPOSE 5000
 # 设置环境变量
 ENV DB_PATH=/data/claw/claw.db
 ENV EASYAI_CONFIG_KEY_FILE=/data/claw/.easyai-config.key
+# stdout is block-buffered without a TTY; unbuffered so docker logs shows print output immediately.
+ENV PYTHONUNBUFFERED=1
 
 # 创建数据目录
 RUN mkdir -p /data/claw

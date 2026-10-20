@@ -284,6 +284,9 @@ class LifecycleAcceptanceTests(unittest.TestCase):
         logged = " ".join(str(call.args[0]) for call in printed.call_args_list if call.args)
         self.assertIn("ended-member removal run start", logged)
         self.assertEqual(logged.count("ended-member removal run start"), 2)
+        sync_logs = [call for call in printed.call_args_list if call.args and "[ProjectSync]" in str(call.args[0])]
+        self.assertTrue(sync_logs)
+        self.assertTrue(all(call.kwargs.get("flush") is True for call in sync_logs))
         self.assertEqual(logged.count("ended-member removal run finished"), 2)
         removes = [call for call in self.fake.calls if call[0] == "remove"]
         self.assertEqual(removes, [("remove", ["easy-a"], "org-p-ended")])
