@@ -1678,6 +1678,24 @@ project_sync_next_at = None
 project_sync_wake = threading.Event()
 project_sync_coordinator = ProjectSyncCoordinator()
 
+# Ended-project member removal is not tied to the full sync interval.
+ENDED_MEMBER_REMOVAL_START_DELAY_SECONDS = 15
+
+
+def _ended_member_removal_interval_seconds():
+    raw = os.getenv('ENDED_MEMBER_REMOVAL_INTERVAL_SECONDS', '3600').strip()
+    try:
+        seconds = int(raw)
+    except (TypeError, ValueError):
+        return 3600
+    return seconds if seconds >= 1 else 3600
+
+
+ENDED_MEMBER_REMOVAL_INTERVAL_SECONDS = _ended_member_removal_interval_seconds()
+ended_member_removal_thread = None
+ended_member_removal_lock = threading.Lock()
+ended_member_removal_wake = threading.Event()
+
 
 def describe_project_sync_scheduler():
     """Explain which value is actually in effect when env and database disagree."""
@@ -1758,6 +1776,7 @@ def project_schedule_settings():
         PROJECT_SYNC_INTERVAL_SECONDS = hours * 3600
         project_sync_next_at = None
         project_sync_wake.set()
+        ended_member_removal_wake.set()
         start_project_sync_scheduler()
         broadcast('config_changed', {'action': 'project_schedule'})
     conn = get_db()
@@ -1871,38 +1890,100 @@ def schedule_project_sync():
             result = project_sync_coordinator.run(project, run_one)
             if result.get('skipped'):
                 print(f'[ProjectSync] skipped overlapping run for {project}')
-        conn = get_db()
-        try:
-            ended_ids = [row['id'] for row in ended_projects_pending_member_removal(conn)]
-        finally:
-            conn.close()
-        if ended_ids:
-            print(f"[ProjectSync] scheduler removal-only step for {len(ended_ids)} ended project(s): {', '.join(ended_ids)}")
-        for project in ended_ids:
+
+
+def run_ended_member_removal_once(trigger='scheduler'):
+    """Remove tracked members from ended projects. Does not run a full sync."""
+    interval = ENDED_MEMBER_REMOVAL_INTERVAL_SECONDS
+    if not PROJECT_SYNC_SCHEDULER_ENABLED:
+        print(f"[ProjectSync] ended-member removal run skipped trigger={trigger}: effective scheduler disabled")
+        return {'success': True, 'skipped': True, 'reason': 'scheduler_disabled', 'removed': 0, 'projects': []}
+    conn = get_db()
+    try:
+        ended_ids = [row['id'] for row in ended_projects_pending_member_removal(conn)]
+    finally:
+        conn.close()
+    print(f"[ProjectSync] ended-member removal run start trigger={trigger} interval={interval}s projects={', '.join(ended_ids) if ended_ids else 'none'}")
+    results = []
+    for project in ended_ids:
+        if not PROJECT_SYNC_SCHEDULER_ENABLED:
+            print("[ProjectSync] ended-member removal run stopped: effective scheduler disabled")
+            break
+        def run_removal(project_id=project):
+            conn = get_db()
+            try:
+                result = remove_ended_project_members(conn, project_id, trigger, 'scheduler')
+                conn.commit()
+                if not result.get('success'):
+                    print(f"[ProjectSync] ended-member removal incomplete for {project_id}: {result.get('error') or result.get('message') or result.get('reason')}")
+                return result
+            except Exception as exc:
+                conn.commit()
+                print(f"[ProjectSync] ended-member removal failed for {project_id}: {redact_error(exc)}")
+                return {"success": False, "error": redact_error(exc), "project_id": project_id, "removed": 0}
+            finally:
+                conn.close()
+        result = project_sync_coordinator.run(project, run_removal)
+        if not isinstance(result, dict):
+            result = {"success": False, "project_id": project, "removed": 0}
+        result.setdefault('project_id', project)
+        if result.get('skipped') and result.get('reason') == 'already_running':
+            print(f"[ProjectSync] skipped overlapping ended-member removal for {project}")
+        results.append(result)
+    removed = sum(int(item.get('removed') or 0) for item in results)
+    failed = sum(not item.get('success') for item in results)
+    if ended_ids:
+        print(f"[ProjectSync] ended-member removal run finished trigger={trigger} removed={removed} failed={failed} of {len(results)}")
+    else:
+        print(f"[ProjectSync] ended-member removal run finished trigger={trigger}: no ended projects with active tracked members")
+    return {'success': failed == 0, 'removed': removed, 'failed': failed, 'projects': results}
+
+
+def schedule_ended_member_removal():
+    """Run once after a short startup delay, then on its own interval."""
+    pending_start_delay = True
+    while True:
+        if not PROJECT_SYNC_SCHEDULER_ENABLED:
+            pending_start_delay = True
+            ended_member_removal_wake.wait()
+            ended_member_removal_wake.clear()
+            continue
+        if pending_start_delay:
+            if ended_member_removal_wake.wait(ENDED_MEMBER_REMOVAL_START_DELAY_SECONDS):
+                ended_member_removal_wake.clear()
+                continue
+            pending_start_delay = False
             if not PROJECT_SYNC_SCHEDULER_ENABLED:
-                break
-            def run_removal(project_id=project):
-                conn = get_db()
-                try:
-                    result = remove_ended_project_members(conn, project_id, 'scheduler', 'scheduler')
-                    conn.commit()
-                    if not result.get('success'):
-                        print(f"[ProjectSync] scheduler ended-member removal incomplete for {project_id}: {result.get('error') or result.get('message') or result.get('reason')}")
-                    return result
-                except Exception as exc:
-                    conn.commit()
-                    print(f"[ProjectSync] scheduler ended-member removal failed for {project_id}: {redact_error(exc)}")
-                    return {"success": False, "error": redact_error(exc)}
-                finally:
-                    conn.close()
-            result = project_sync_coordinator.run(project, run_removal)
-            if result.get('skipped') and result.get('reason') == 'already_running':
-                print(f"[ProjectSync] skipped overlapping ended-member removal for {project}")
+                pending_start_delay = True
+                continue
+        try:
+            run_ended_member_removal_once('scheduler')
+        except Exception as exc:
+            print(f"[ProjectSync] ended-member removal run failed: {redact_error(exc)}")
+        if ended_member_removal_wake.wait(ENDED_MEMBER_REMOVAL_INTERVAL_SECONDS):
+            ended_member_removal_wake.clear()
+            if not PROJECT_SYNC_SCHEDULER_ENABLED:
+                pending_start_delay = True
+
+
+def start_ended_member_removal_scheduler():
+    """Start the independent removal loop when the effective scheduler is on."""
+    global ended_member_removal_thread
+    if not PROJECT_SYNC_SCHEDULER_ENABLED:
+        print("[ProjectSync] ended-member removal scheduler not started: effective scheduler disabled")
+        return
+    with ended_member_removal_lock:
+        if ended_member_removal_thread and ended_member_removal_thread.is_alive():
+            return
+        ended_member_removal_thread = threading.Thread(target=schedule_ended_member_removal, daemon=True, name='ended-member-removal')
+        ended_member_removal_thread.start()
+        print(f"[ProjectSync] ended-member removal scheduler started, first run in {ENDED_MEMBER_REMOVAL_START_DELAY_SECONDS}s, then every {ENDED_MEMBER_REMOVAL_INTERVAL_SECONDS}s")
 
 
 def start_project_sync_scheduler():
     global project_sync_scheduler_thread
     print(describe_project_sync_scheduler())
+    start_ended_member_removal_scheduler()
     if not PROJECT_SYNC_SCHEDULER_ENABLED:
         return
     with project_sync_scheduler_lock:

@@ -79,7 +79,8 @@ npx --yes --package @playwright/cli playwright-cli -s=dashboard-access run-code 
 | `DB_PATH` | 本地默认 `claw.db`，生产 `/data/claw/claw.db` |
 | `EASYAI_SYNC_MODE` | 默认 `mock`，`real` 使用真实平台管理接口 |
 | `EASYAI_SYNC_ENABLED` | 组织同步能力开关 |
-| `SYNC_SCHEDULER_ENABLED` | 启动默认值，默认关闭。若数据库 `config.project_sync_enabled` 已保存，以该值为准并覆盖本环境变量。启动和开关调度时日志打印 `effective scheduler enabled=... source=...` |
+| `SYNC_SCHEDULER_ENABLED` | 启动默认值，默认关闭。若数据库 `config.project_sync_enabled` 已保存，以该值为准并覆盖本环境变量。启动和开关调度时日志打印 `effective scheduler enabled=... source=...`。结束成员移除也遵守这个有效开关 |
+| `ENDED_MEMBER_REMOVAL_INTERVAL_SECONDS` | 已结束项目成员移除的独立周期，默认 `3600`。进程启动时读取。与全量同步周期无关 |
 | `EASYAI_CONFIG_KEY_FILE` | 凭据加密密钥文件，生产随 `/data/claw` 持久化 |
 | `EASYAI_CONFIG_ENCRYPTION_KEY` | 可选显式加密密钥，不可提交 Git |
 | `DINGTALK_APP_KEY` / `DINGTALK_APP_SECRET` | 钉钉凭据，也可在后台配置 |
@@ -89,7 +90,7 @@ npx --yes --package @playwright/cli playwright-cli -s=dashboard-access run-code 
 
 生产环境里 `SYNC_SCHEDULER_ENABLED=false` 只是默认值。后台曾经保存过自动同步时，数据库 `project_sync_enabled=true` 会在启动时覆盖环境变量，调度实际开启。以启动日志中的 `effective scheduler` 为准，不要只看环境变量。
 
-已结束项目（`end_date` 早于本地当天）不创建组织、不改名、不加人。若 `project_easyai_member` 仍有 `active` 行，每一轮调度只对这些跟踪成员调用 `POST /v1/openapi/organization/{org}/users/batch/remove`，成功后把对应行标为 `removed`。没有 active 行时该步不请求平台。单个项目失败不影响同轮其他项目。手动触发：`POST /api/project-sync/ended-members/remove`，可选 JSON `{"projectId":"..."}`。
+已结束项目（`end_date` 早于本地当天）不创建组织、不改名、不加人。有效调度开启时，进程启动后延迟 15 秒执行一次结束成员移除，之后按 `ENDED_MEMBER_REMOVAL_INTERVAL_SECONDS`（默认 3600 秒）重复，不跟随全量同步的小时间隔。每一轮只对仍有 `active` 行的已结束项目调用 `POST /v1/openapi/organization/{org}/users/batch/remove`，成功后把对应行标为 `removed`，并打印 `ended-member removal run start/finished`。没有 active 行时该轮不请求平台。单个项目失败不影响同轮其他项目。手动触发：`POST /api/project-sync/ended-members/remove`，可选 JSON `{"projectId":"..."}`。
 
 EasyAI 3.30.x 中 `GET /organization/{id}` 不再返回成员，组织列表 `GET /organization` 仍返回 `users`。成员核对只用列表，不请求详情。批量加入和移除仍是 `POST /v1/openapi/organization/{org}/users/batch/add` 与 `.../batch/remove`。
 
