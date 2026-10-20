@@ -253,11 +253,17 @@ class LifecycleAcceptanceTests(unittest.TestCase):
                 dashboard_app.schedule_project_sync()
         self.assertEqual([call.args[1] for call in sync.call_args_list], ['current'])
 
-    def _run_one_scheduler_round(self):
+    def _run_ended_member_removal(self, wait_results):
         with patch.object(dashboard_app, "PROJECT_SYNC_SCHEDULER_ENABLED", True), \
-             patch.object(dashboard_app.project_sync_wake, "wait", side_effect=[False, InterruptedError]):
+             patch.object(dashboard_app, "ENDED_MEMBER_REMOVAL_START_DELAY_SECONDS", 15), \
+             patch.object(dashboard_app, "ENDED_MEMBER_REMOVAL_INTERVAL_SECONDS", 3600), \
+             patch.object(dashboard_app, "PROJECT_SYNC_INTERVAL_SECONDS", 21600), \
+             patch.object(dashboard_app.ended_member_removal_wake, "wait", side_effect=wait_results) as waited:
             with self.assertRaises(InterruptedError):
-                dashboard_app.schedule_project_sync()
+                dashboard_app.schedule_ended_member_removal()
+        self.assertEqual(waited.call_args_list[0].args, (15,))
+        self.assertTrue(all(call.args != (21600,) for call in waited.call_args_list))
+        return waited
 
     def test_scheduler_removes_tracked_members_the_day_after_end_and_second_run_is_noop(self):
         self.add_project("p-ended", "Ended project")
@@ -271,7 +277,14 @@ class LifecycleAcceptanceTests(unittest.TestCase):
         ).fetchone())
         self.conn.commit()
         self.fake.calls.clear()
-        self._run_one_scheduler_round()
+        with patch("builtins.print") as printed:
+            waited = self._run_ended_member_removal([False, False, InterruptedError])
+        self.assertEqual(waited.call_args_list[1].args, (3600,))
+        self.assertEqual(waited.call_args_list[2].args, (3600,))
+        logged = " ".join(str(call.args[0]) for call in printed.call_args_list if call.args)
+        self.assertIn("ended-member removal run start", logged)
+        self.assertEqual(logged.count("ended-member removal run start"), 2)
+        self.assertEqual(logged.count("ended-member removal run finished"), 2)
         removes = [call for call in self.fake.calls if call[0] == "remove"]
         self.assertEqual(removes, [("remove", ["easy-a"], "org-p-ended")])
         self.assertFalse(any(call[0] in {"add", "rename", "description", "delete_org"} for call in self.fake.calls))
@@ -285,13 +298,9 @@ class LifecycleAcceptanceTests(unittest.TestCase):
         self.assertEqual(tuple(run), (1, 0, "scheduler", "succeeded"))
         audit = self.conn.execute("SELECT operation, result FROM sync_audit_log WHERE project_id='p-ended' AND operation='ended_member_removal'").fetchone()
         self.assertEqual(tuple(audit), ("ended_member_removal", "succeeded"))
-        runs_after_first = self.conn.execute("SELECT COUNT(*) FROM sync_run WHERE project_id='p-ended'").fetchone()[0]
-        self.fake.calls.clear()
-        self._run_one_scheduler_round()
-        self.assertEqual(self.fake.calls, [])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM sync_run WHERE project_id='p-ended' AND trigger='scheduler'").fetchone()[0], 1)
         self.conn.commit()
         self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_member WHERE project_id='p-ended'").fetchone()[0], "removed")
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM sync_run WHERE project_id='p-ended'").fetchone()[0], runs_after_first)
 
     def test_scheduler_ended_removal_continues_after_one_project_fails(self):
         self.add_project("p-fail")
@@ -310,7 +319,7 @@ class LifecycleAcceptanceTests(unittest.TestCase):
             return original(ids, org)
         self.fake.remove_users_from_organization = remove_fail_first
         self.fake.calls.clear()
-        self._run_one_scheduler_round()
+        self._run_ended_member_removal([False, InterruptedError])
         self.conn.commit()
         self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_member WHERE project_id='p-fail'").fetchone()[0], "active")
         self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_member WHERE project_id='p-ok'").fetchone()[0], "removed")
@@ -405,6 +414,39 @@ class LifecycleAcceptanceTests(unittest.TestCase):
             thread.assert_not_called()
         with patch.dict(os.environ, {"SYNC_INTERVAL_MINUTES": "10"}):
             self.assertEqual(dashboard_app._project_sync_interval_seconds(), 600)
+
+    def test_ended_member_removal_interval_defaults_and_is_independent(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ENDED_MEMBER_REMOVAL_INTERVAL_SECONDS", None)
+            self.assertEqual(dashboard_app._ended_member_removal_interval_seconds(), 3600)
+        with patch.dict(os.environ, {"ENDED_MEMBER_REMOVAL_INTERVAL_SECONDS": "1800"}):
+            self.assertEqual(dashboard_app._ended_member_removal_interval_seconds(), 1800)
+        for raw in ("nope", "0", "-5", ""):
+            with patch.dict(os.environ, {"ENDED_MEMBER_REMOVAL_INTERVAL_SECONDS": raw}):
+                self.assertEqual(dashboard_app._ended_member_removal_interval_seconds(), 3600)
+
+    def test_ended_member_removal_respects_disabled_scheduler_and_logs_runs(self):
+        self.add_project("p-ended")
+        self.add_person_assignment("p-ended")
+        sync_project(self.conn, "p-ended")
+        self.conn.execute("UPDATE projects SET end_date=? WHERE id='p-ended'", ((date.today() - timedelta(days=1)).isoformat(),))
+        self.conn.commit()
+        self.fake.calls.clear()
+        with patch.object(dashboard_app, "PROJECT_SYNC_SCHEDULER_ENABLED", False), \
+             patch.object(dashboard_app.ended_member_removal_wake, "wait", side_effect=InterruptedError), \
+             patch("builtins.print") as printed:
+            with self.assertRaises(InterruptedError):
+                dashboard_app.schedule_ended_member_removal()
+        self.assertEqual(self.fake.calls, [])
+        logged = " ".join(str(call.args[0]) for call in printed.call_args_list if call.args)
+        self.assertNotIn("ended-member removal run start", logged)
+        self.addCleanup(setattr, dashboard_app, "ended_member_removal_thread", None)
+        self.addCleanup(setattr, dashboard_app, "project_sync_scheduler_thread", None)
+        with patch.object(dashboard_app, "PROJECT_SYNC_SCHEDULER_ENABLED", True), \
+             patch.object(dashboard_app.threading, "Thread") as thread:
+            dashboard_app.start_project_sync_scheduler()
+        names = [call.kwargs.get("name") for call in thread.call_args_list]
+        self.assertEqual(names, ["ended-member-removal", "project-sync-scheduler"])
 
     def test_partial_failure_can_retry_only_failed_members(self):
         self.add_project("p-partial")
