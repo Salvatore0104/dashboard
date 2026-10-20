@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env.local'), override=False)
 load_dotenv(override=False)
 
-from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, preview_all_projects, sync_all_projects, cleanup_deleted_binding, refresh_identity_inventory, identity_inventory_preview, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, load_easyai_runtime_config, normalize_bearer_token, mask_secret, EasyAIClient, ProjectSyncCoordinator
+from project_sync import ensure_tables, ensure_binding, update_project_binding_name, preview_project, sync_project, preview_all_projects, sync_all_projects, cleanup_deleted_binding, refresh_identity_inventory, identity_inventory_preview, redact_error, SYNC_ENABLED, SYNC_MODE, encrypt_secret, decrypt_secret, load_easyai_runtime_config, normalize_bearer_token, mask_secret, EasyAIClient, ProjectSyncCoordinator, ended_projects_pending_member_removal, remove_ended_project_members
 
 from project_sync import organization_consistency, syncable_projects
 
@@ -1656,7 +1656,13 @@ leave_scheduler_lock = threading.Lock()
 
 project_sync_scheduler_thread = None
 project_sync_scheduler_lock = threading.Lock()
-PROJECT_SYNC_SCHEDULER_ENABLED = os.getenv('SYNC_SCHEDULER_ENABLED', 'false').strip().lower() in {'1', 'true', 'yes', 'on'}
+def _env_scheduler_enabled():
+    return os.getenv('SYNC_SCHEDULER_ENABLED', 'false').strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+PROJECT_SYNC_SCHEDULER_ENABLED = _env_scheduler_enabled()
+# 'env' until config.project_sync_enabled is loaded. A saved database value overrides the env flag.
+PROJECT_SYNC_SCHEDULER_SOURCE = 'env'
 
 
 def _project_sync_interval_seconds():
@@ -1673,19 +1679,70 @@ project_sync_wake = threading.Event()
 project_sync_coordinator = ProjectSyncCoordinator()
 
 
+def describe_project_sync_scheduler():
+    """Explain which value is actually in effect when env and database disagree."""
+    env_enabled = _env_scheduler_enabled()
+    enabled = bool(PROJECT_SYNC_SCHEDULER_ENABLED)
+    source = PROJECT_SYNC_SCHEDULER_SOURCE
+    if source == 'database' and env_enabled != enabled:
+        origin = f"config.project_sync_enabled={str(enabled).lower()} overrides SYNC_SCHEDULER_ENABLED={str(env_enabled).lower()}"
+    elif source == 'database':
+        origin = f"config.project_sync_enabled={str(enabled).lower()} (matches SYNC_SCHEDULER_ENABLED)"
+    else:
+        origin = f"SYNC_SCHEDULER_ENABLED={str(env_enabled).lower()} (no config.project_sync_enabled)"
+    return f"[ProjectSync] effective scheduler enabled={str(enabled).lower()} source={source} ({origin}), interval={PROJECT_SYNC_INTERVAL_SECONDS}s"
+
+
 def load_project_schedule():
-    global PROJECT_SYNC_SCHEDULER_ENABLED, PROJECT_SYNC_INTERVAL_SECONDS
+    global PROJECT_SYNC_SCHEDULER_ENABLED, PROJECT_SYNC_INTERVAL_SECONDS, PROJECT_SYNC_SCHEDULER_SOURCE
     conn = get_db()
     values = dict(conn.execute("SELECT key,value FROM config WHERE key IN ('project_sync_enabled','project_sync_interval_hours')").fetchall())
     conn.close()
     if 'project_sync_enabled' in values:
         PROJECT_SYNC_SCHEDULER_ENABLED = values['project_sync_enabled'] == 'true'
+        PROJECT_SYNC_SCHEDULER_SOURCE = 'database'
+    else:
+        PROJECT_SYNC_SCHEDULER_ENABLED = _env_scheduler_enabled()
+        PROJECT_SYNC_SCHEDULER_SOURCE = 'env'
     PROJECT_SYNC_INTERVAL_SECONDS = int(values.get('project_sync_interval_hours', '1')) * 3600
+    print(describe_project_sync_scheduler())
+
+
+@app.route('/api/project-sync/ended-members/remove', methods=['POST'])
+def project_sync_remove_ended_members():
+    """Manually run the removal-only step for ended projects."""
+    data = request.get_json(silent=True) or {}
+    project_id = str(data.get('projectId') or '').strip()
+    conn = get_db()
+    try:
+        targets = [project_id] if project_id else [row['id'] for row in ended_projects_pending_member_removal(conn)]
+    finally:
+        conn.close()
+    results = []
+    for pid in targets:
+        def run_one(project_id=pid):
+            conn = get_db()
+            try:
+                result = remove_ended_project_members(conn, project_id, 'manual', g.visitor['id'])
+                conn.commit()
+                return result
+            except Exception as exc:
+                conn.commit()
+                return {'success': False, 'project_id': project_id, 'error': redact_error(exc), 'retryable': True, 'removed': 0, 'added': 0}
+            finally:
+                conn.close()
+        result = project_sync_coordinator.run(pid, run_one)
+        if not isinstance(result, dict):
+            result = {'success': False, 'project_id': pid, 'removed': 0}
+        result.setdefault('project_id', pid)
+        results.append(result)
+    failed = [item for item in results if not item.get('success')]
+    return jsonify({'success': not failed, 'projects': results, 'removed': sum(int(item.get('removed') or 0) for item in results), 'added': 0})
 
 
 @app.route('/api/project-sync/schedule', methods=['GET', 'POST'])
 def project_schedule_settings():
-    global PROJECT_SYNC_SCHEDULER_ENABLED, PROJECT_SYNC_INTERVAL_SECONDS, project_sync_next_at
+    global PROJECT_SYNC_SCHEDULER_ENABLED, PROJECT_SYNC_SCHEDULER_SOURCE, PROJECT_SYNC_INTERVAL_SECONDS, project_sync_next_at
     if request.method == 'POST':
         data = request.get_json(silent=True) or {}
         hours = data.get('intervalHours')
@@ -1697,6 +1754,7 @@ def project_schedule_settings():
                          [('project_sync_enabled', 'true' if enabled else 'false'), ('project_sync_interval_hours', str(hours))])
         conn.commit(); conn.close()
         PROJECT_SYNC_SCHEDULER_ENABLED = enabled
+        PROJECT_SYNC_SCHEDULER_SOURCE = 'database'
         PROJECT_SYNC_INTERVAL_SECONDS = hours * 3600
         project_sync_next_at = None
         project_sync_wake.set()
@@ -1705,8 +1763,13 @@ def project_schedule_settings():
     conn = get_db()
     values = dict(conn.execute("SELECT key,value FROM config WHERE key IN ('project_sync_enabled','project_sync_interval_hours')").fetchall())
     conn.close()
-    return jsonify({'success': True, 'enabled': values.get('project_sync_enabled', str(PROJECT_SYNC_SCHEDULER_ENABLED).lower()) == 'true',
-                    'intervalHours': int(values.get('project_sync_interval_hours', '1'))})
+    saved_enabled = values.get('project_sync_enabled')
+    enabled = (saved_enabled == 'true') if saved_enabled is not None else bool(PROJECT_SYNC_SCHEDULER_ENABLED)
+    return jsonify({'success': True, 'enabled': enabled,
+                    'intervalHours': int(values.get('project_sync_interval_hours', '1')),
+                    'source': 'database' if saved_enabled is not None else PROJECT_SYNC_SCHEDULER_SOURCE,
+                    'envEnabled': _env_scheduler_enabled(),
+                    'effectiveEnabled': bool(PROJECT_SYNC_SCHEDULER_ENABLED)})
 
 
 @app.route('/api/project-sync/overview', methods=['GET'])
@@ -1808,12 +1871,39 @@ def schedule_project_sync():
             result = project_sync_coordinator.run(project, run_one)
             if result.get('skipped'):
                 print(f'[ProjectSync] skipped overlapping run for {project}')
+        conn = get_db()
+        try:
+            ended_ids = [row['id'] for row in ended_projects_pending_member_removal(conn)]
+        finally:
+            conn.close()
+        if ended_ids:
+            print(f"[ProjectSync] scheduler removal-only step for {len(ended_ids)} ended project(s): {', '.join(ended_ids)}")
+        for project in ended_ids:
+            if not PROJECT_SYNC_SCHEDULER_ENABLED:
+                break
+            def run_removal(project_id=project):
+                conn = get_db()
+                try:
+                    result = remove_ended_project_members(conn, project_id, 'scheduler', 'scheduler')
+                    conn.commit()
+                    if not result.get('success'):
+                        print(f"[ProjectSync] scheduler ended-member removal incomplete for {project_id}: {result.get('error') or result.get('message') or result.get('reason')}")
+                    return result
+                except Exception as exc:
+                    conn.commit()
+                    print(f"[ProjectSync] scheduler ended-member removal failed for {project_id}: {redact_error(exc)}")
+                    return {"success": False, "error": redact_error(exc)}
+                finally:
+                    conn.close()
+            result = project_sync_coordinator.run(project, run_removal)
+            if result.get('skipped') and result.get('reason') == 'already_running':
+                print(f"[ProjectSync] skipped overlapping ended-member removal for {project}")
 
 
 def start_project_sync_scheduler():
     global project_sync_scheduler_thread
+    print(describe_project_sync_scheduler())
     if not PROJECT_SYNC_SCHEDULER_ENABLED:
-        print('[ProjectSync] scheduler disabled (set SYNC_SCHEDULER_ENABLED=true to enable)')
         return
     with project_sync_scheduler_lock:
         if project_sync_scheduler_thread and project_sync_scheduler_thread.is_alive():

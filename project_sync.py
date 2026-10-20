@@ -207,6 +207,13 @@ class EasyAIClient:
             raise RuntimeError(f"EasyAI API returned non-JSON ({response.status_code}, {response.headers.get('content-type', 'unknown')})")
 
     def list_organizations(self):
+        """Return the organization tree from GET /organization.
+
+        EasyAI 3.30.x still includes ``users`` on this list. GET
+        /organization/{id} no longer returns members, so membership checks
+        must use this list (see organization_record) and must not call the
+        detail route.
+        """
         if self.mode == "mock":
             return list(self._mock_orgs.values())
         data = self._request("GET", "/organization")
@@ -215,6 +222,16 @@ class EasyAIClient:
         if isinstance(data, dict):
             return data.get("data", data.get("organizations", []))
         return []
+
+    def organization_record(self, org_id):
+        """Find one organization, including its members, from the list payload."""
+        wanted = str(org_id or "")
+        if not wanted:
+            return None
+        for item in iter_organizations(self.list_organizations()):
+            if organization_id(item) == wanted:
+                return item
+        return None
 
     def find_parent_organization(self, name):
         orgs = list(iter_organizations(self.list_organizations()))
@@ -306,6 +323,7 @@ class EasyAIClient:
             return {"added": len(user_ids), "success_ids": user_ids, "org_id": org_id}
         # The set endpoint replaces a user's organization membership.  Use the
         # additive OpenAPI endpoint so existing organization access is retained.
+        # OpenAPI batch add is still the additive membership route in 3.30.x.
         path = f"/v1/openapi/organization/{org_id}/users/batch/add"
         data = self._request("POST", path, json={"user_ids": user_ids})
         return data.get("data", data) if isinstance(data, dict) else data
@@ -315,7 +333,7 @@ class EasyAIClient:
         raise RuntimeError("看板禁止删除平台组织，请在 wowidea 平台管理")
 
     def validate_owned_organization(self, org_id, parent_id, external_id, managed_user_ids=None, require_empty=False):
-        org = next((item for item in iter_organizations(self.list_organizations()) if organization_id(item) == str(org_id)), None)
+        org = self.organization_record(org_id)
         if not org:
             return None
         actual_parent = str(org.get("parent") or org.get("parent_id") or org.get("parentId") or "")
@@ -344,6 +362,7 @@ class EasyAIClient:
             return {"removed": 0, "user_ids": []}
         if self.mode == "mock":
             return {"removed": len(user_ids), "success_ids": user_ids, "org_id": org_id}
+        # OpenAPI batch remove is unchanged in EasyAI 3.30.x.
         path = f"/v1/openapi/organization/{org_id}/users/batch/remove"
         data = self._request("POST", path, json={"user_ids": user_ids})
         return data.get("data", data) if isinstance(data, dict) else data
@@ -789,7 +808,9 @@ def organization_consistency(conn):
                 unresolved = True
             else:
                 expected.add(str(identity["easyai_user_id"]))
-        # Missing membership data is not proof of an empty organization.
+        # EasyAI 3.30.x keeps members on the organization list. A missing
+        # users array means that list payload is incomplete; do not fall
+        # back to GET /organization/{id}, which no longer returns users.
         if not isinstance(org.get("users"), list):
             raise RuntimeError("平台未返回完整组织成员，无法核对")
         actual = {_user_id(user) if isinstance(user, dict) else str(user) for user in org["users"]}
@@ -910,6 +931,111 @@ def sync_project(conn, project_id, trigger="manual", operator_id=""):
         conn.execute("UPDATE sync_run SET status='failed', finished_at=?, error_count=1, details=? WHERE id=?", (now_ms(), json.dumps({"error": message}, ensure_ascii=False), run_id))
         conn.execute("UPDATE project_easyai_binding SET status='error', last_error=?, updated_at=datetime('now') WHERE project_id=?", (message, project_id))
         conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, result, error_code, created_at) VALUES (?, ?, ?, 'project_sync', 'failed', ?, ?)", (str(uuid.uuid4()), operator_id, project_id, message[:120], now_ms()))
+        raise
+
+
+def ended_projects_pending_member_removal(conn):
+    """Ended projects that still have active tracked organization members."""
+    today = time.strftime("%Y-%m-%d")
+    return conn.execute("""
+        SELECT p.*
+        FROM projects p
+        WHERE p.end_date <> '' AND p.end_date < ?
+          AND EXISTS (
+              SELECT 1 FROM project_easyai_member m
+              WHERE m.project_id = p.id AND m.status = 'active'
+          )
+        ORDER BY p.end_date, p.id
+    """, (today,)).fetchall()
+
+
+def remove_ended_project_members(conn, project_id, trigger="manual", operator_id=""):
+    """Remove tracked members after a project ends.
+
+    This step only calls batch/remove for active project_easyai_member rows.
+    It does not add members and does not create, rename, or otherwise update
+    the organization binding. With no active rows it is a no-op and does not
+    call the provider. Successful ids are marked removed; failures stay active
+    so the next round can retry just those members.
+    """
+    project = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+    if not project:
+        raise ValueError("项目不存在")
+    if not project_is_archived(project):
+        return {"success": True, "skipped": True, "reason": "not_ended", "removed": 0, "added": 0,
+                "project_id": str(project_id), "message": "项目尚未结束，不执行结束移除"}
+    rows = conn.execute(
+        "SELECT easyai_user_id, easyai_org_id FROM project_easyai_member WHERE project_id=? AND status='active' ORDER BY easyai_user_id",
+        (project_id,),
+    ).fetchall()
+    member_ids = [str(row["easyai_user_id"]) for row in rows if row["easyai_user_id"]]
+    if not member_ids:
+        print(f"[ProjectSync] ended project {project_id}: no active tracked members, removal is a no-op")
+        return {"success": True, "skipped": True, "reason": "no_active_members", "removed": 0, "added": 0,
+                "noop": True, "project_id": str(project_id), "message": "已结束项目没有仍在跟踪的成员"}
+    binding = conn.execute("SELECT * FROM project_easyai_binding WHERE project_id=?", (project_id,)).fetchone()
+    if binding and binding["easyai_org_id"]:
+        targets = [(str(binding["easyai_org_id"]), member_ids)]
+    else:
+        grouped = {}
+        for row in rows:
+            org_id = str(row["easyai_org_id"] or "")
+            user_id = str(row["easyai_user_id"] or "")
+            if org_id and user_id:
+                grouped.setdefault(org_id, []).append(user_id)
+        targets = list(grouped.items())
+    if not targets:
+        raise RuntimeError("已结束项目缺少组织 ID，无法移除成员")
+    if not SYNC_ENABLED:
+        print(f"[ProjectSync] ended project {project_id}: sync disabled, left {len(member_ids)} tracked members active")
+        return {"success": False, "skipped": True, "reason": "sync_disabled", "removed": 0, "added": 0,
+                "retryable": True, "project_id": str(project_id), "message": "组织同步未启用，未移除已结束项目成员"}
+    running = conn.execute("SELECT id FROM sync_run WHERE project_id=? AND status='running' LIMIT 1", (project_id,)).fetchone()
+    if running:
+        raise RuntimeError("该项目已有同步任务正在运行")
+    run_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO sync_run (id, project_id, trigger, status, started_at, idempotency_key, details) VALUES (?, ?, ?, 'running', ?, ?, ?)",
+        (run_id, project_id, trigger, now_ms(), f"ended-removal:{project_id}:{run_id}",
+         json.dumps({"operation": "ended_member_removal", "requested_ids": member_ids}, ensure_ascii=False)),
+    )
+    org_label = ",".join(org_id for org_id, _ids in targets)
+    print(f"[ProjectSync] ended project {project_id} end_date={project['end_date']}: removing {len(member_ids)} tracked members from organization {org_label} via POST /v1/openapi/organization/{{org}}/users/batch/remove")
+    try:
+        client = EasyAIClient(load_easyai_runtime_config(conn))
+        success_ids = []
+        failed_ids = []
+        removal_results = []
+        for org_id, org_member_ids in targets:
+            removal_raw = client.remove_users_from_organization(org_member_ids, org_id)
+            removal = _batch_result(removal_raw, org_member_ids, "remove")
+            success_ids.extend(removal["success_ids"])
+            failed_ids.extend(item for item in org_member_ids if item not in removal["success_ids"])
+            removal_results.append({"org_id": org_id, "requested_ids": removal["requested_ids"], "success_ids": removal["success_ids"], "failed_ids": removal["failed_ids"], "partial": removal["partial"]})
+        synced_at = now_ms()
+        for stale_id in success_ids:
+            conn.execute("UPDATE project_easyai_member SET status='removed', last_synced_at=? WHERE project_id=? AND easyai_user_id=?", (synced_at, project_id, stale_id))
+        partial = len(success_ids) < len(member_ids)
+        details = {"operation": "ended_member_removal", "requested_ids": member_ids, "removed_ids": success_ids, "failed_ids": failed_ids, "removal_results": removal_results, "binding_unchanged": True, "added": 0}
+        conn.execute(
+            "UPDATE sync_run SET status=?, finished_at=?, added_count=0, existing_count=0, removed_count=?, error_count=?, details=? WHERE id=?",
+            ("failed" if partial else "succeeded", now_ms(), len(success_ids), 1 if partial else 0, json.dumps(details, ensure_ascii=False), run_id),
+        )
+        conn.execute(
+            "INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, affected_user_ids, result, created_at) VALUES (?, ?, ?, 'ended_member_removal', ?, ?, ?, ?)",
+            (str(uuid.uuid4()), operator_id, project_id, org_label, json.dumps(success_ids), "failed" if partial else "succeeded", now_ms()),
+        )
+        print(f"[ProjectSync] ended project {project_id}: removed {len(success_ids)}/{len(member_ids)} tracked members; binding unchanged")
+        result = {"success": not partial, "run_id": run_id, "removed": len(success_ids), "requested": len(member_ids), "failed": len(member_ids) - len(success_ids), "project_id": str(project_id), "org_id": org_label, "added": 0, "binding_unchanged": True, "details": details}
+        if partial:
+            result["error"] = "已结束项目成员移除部分失败，失败成员保持跟踪并会在下一轮重试"
+            result["retryable"] = True
+        return result
+    except Exception as exc:
+        message = redact_error(exc)
+        conn.execute("UPDATE sync_run SET status='failed', finished_at=?, error_count=1, details=? WHERE id=?", (now_ms(), json.dumps({"error": message, "operation": "ended_member_removal"}, ensure_ascii=False), run_id))
+        conn.execute("INSERT INTO sync_audit_log (id, operator_id, project_id, operation, target_org_id, result, error_code, created_at) VALUES (?, ?, ?, 'ended_member_removal', ?, 'failed', ?, ?)", (str(uuid.uuid4()), operator_id, project_id, org_label, message[:120], now_ms()))
+        print(f"[ProjectSync] ended project {project_id}: removal failed: {message}")
         raise
 
 

@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import unittest
+from datetime import date, timedelta
 from unittest.mock import patch
 from pathlib import Path
 
@@ -60,24 +61,54 @@ class ProjectSyncUnitTests(unittest.TestCase):
         self.assertEqual(request.call_args.kwargs['json']['balance_deduction_strategy'], 'organization_first')
         self.assertEqual(request.call_args.kwargs['json']['description'], '20260922-20260929')
 
+    def test_membership_is_read_from_organization_list_not_detail(self):
+        client = EasyAIClient({"bearer_token": "token"})
+        client.mode = "real"
+        def request(method, path, **kwargs):
+            if (method, path) == ("GET", "/organization"):
+                return [{"_id": "org-1", "name": "P", "parent": "parent", "users": [{"_id": "u1"}], "userCount": 1}]
+            raise AssertionError(f"EasyAI 3.30 detail route must not be used for members: {method} {path}")
+        with patch.object(client, "_request", side_effect=request) as seen:
+            org = client.organization_record("org-1")
+            self.assertIsNone(client.organization_record("missing"))
+        self.assertEqual(organization_id(org), "org-1")
+        self.assertEqual(org["users"][0]["_id"], "u1")
+        self.assertEqual([call.args for call in seen.call_args_list], [("GET", "/organization"), ("GET", "/organization")])
+
+    def test_batch_member_routes_match_easyai_openapi(self):
+        client = EasyAIClient({"bearer_token": "token"})
+        client.mode = "real"
+        with patch.object(client, "_request", return_value={"data": {"success_ids": ["u1"]}}) as request:
+            client.remove_users_from_organization(["u1"], "org-1")
+            client.add_users_to_organization(["u1"], "org-1")
+        self.assertEqual(request.call_args_list[0].args, ("POST", "/v1/openapi/organization/org-1/users/batch/remove"))
+        self.assertEqual(request.call_args_list[0].kwargs["json"], {"user_ids": ["u1"]})
+        self.assertEqual(request.call_args_list[1].args, ("POST", "/v1/openapi/organization/org-1/users/batch/add"))
+        self.assertEqual(request.call_args_list[1].kwargs["json"], {"user_ids": ["u1"]})
+
     def test_reuse_preserves_finances_and_updates_project_dates(self):
         client = EasyAIClient(); client.mode = 'mock'
         client._mock_orgs = {'parent': {'_id':'parent','name':'执行项目组'},
                             'old': {'_id':'old','parent':'parent','name':'Existing','balance':123,'balance_deduction_strategy':'user_only'}}
-        self.conn.execute("INSERT INTO projects VALUES ('reuse','Existing','2026-09-22','2026-09-29')")
+        start = date.today()
+        first_end = start + timedelta(days=7)
+        second_end = start + timedelta(days=14)
+        third_end = start + timedelta(days=21)
+        compact = lambda day: day.strftime('%Y%m%d')
+        self.conn.execute("INSERT INTO projects VALUES ('reuse','Existing',?,?)", (start.isoformat(), first_end.isoformat()))
         with patch('project_sync.EasyAIClient', return_value=client), patch('project_sync.SYNC_ENABLED', True), patch.object(client,'create_organization',side_effect=AssertionError('must reuse')):
             binding = ensure_binding(self.conn,'reuse','Existing')
             self.assertEqual(binding['easyai_org_id'],'old')
-            self.assertEqual(client._mock_orgs['old']['description'],'20260922-20260929')
+            self.assertEqual(client._mock_orgs['old']['description'], f"{compact(start)}-{compact(first_end)}")
             self.assertEqual(client._mock_orgs['old']['balance'],123)
             self.assertEqual(client._mock_orgs['old']['balance_deduction_strategy'],'user_only')
-            self.conn.execute("UPDATE projects SET end_date='2026-10-01' WHERE id='reuse'")
+            self.conn.execute("UPDATE projects SET end_date=? WHERE id='reuse'", (second_end.isoformat(),))
             ensure_binding(self.conn,'reuse','Existing')
-            self.assertEqual(client._mock_orgs['old']['description'],'20260922-20261001')
+            self.assertEqual(client._mock_orgs['old']['description'], f"{compact(start)}-{compact(second_end)}")
             self.assertEqual(client._mock_orgs['old']['balance'],123)
             self.conn.execute("DELETE FROM projects WHERE id='reuse'")
             self.conn.execute("UPDATE project_easyai_binding SET status='retained' WHERE project_id='reuse'")
-            self.conn.execute("INSERT INTO projects VALUES ('reuse-new','Existing','2026-10-01','2026-10-09')")
+            self.conn.execute("INSERT INTO projects VALUES ('reuse-new','Existing',?,?)", (second_end.isoformat(), third_end.isoformat()))
             rebound = ensure_binding(self.conn,'reuse-new','Existing')
             self.assertEqual(rebound['easyai_org_id'],'old')
             self.assertEqual(client._mock_orgs['old']['balance'],123)

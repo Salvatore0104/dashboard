@@ -79,13 +79,19 @@ npx --yes --package @playwright/cli playwright-cli -s=dashboard-access run-code 
 | `DB_PATH` | 本地默认 `claw.db`，生产 `/data/claw/claw.db` |
 | `EASYAI_SYNC_MODE` | 默认 `mock`，`real` 使用真实平台管理接口 |
 | `EASYAI_SYNC_ENABLED` | 组织同步能力开关 |
-| `SYNC_SCHEDULER_ENABLED` | 默认关闭；后台保存的调度配置优先 |
+| `SYNC_SCHEDULER_ENABLED` | 启动默认值，默认关闭。若数据库 `config.project_sync_enabled` 已保存，以该值为准并覆盖本环境变量。启动和开关调度时日志打印 `effective scheduler enabled=... source=...` |
 | `EASYAI_CONFIG_KEY_FILE` | 凭据加密密钥文件，生产随 `/data/claw` 持久化 |
 | `EASYAI_CONFIG_ENCRYPTION_KEY` | 可选显式加密密钥，不可提交 Git |
 | `DINGTALK_APP_KEY` / `DINGTALK_APP_SECRET` | 钉钉凭据，也可在后台配置 |
 | `EASYAI_DINGTALK_BIND_PATH` | 可选既有用户身份绑定接口；为空时仅保存本地映射，组织成员同步仍可执行 |
 
 真实同步需配置正确的管理凭据并显式启用真实模式。数据库、环境文件及加密密钥不能进入 Git 或镜像；备份数据库时保留对应密钥，日志不得输出凭据。不要使用生产组织做开发测试。
+
+生产环境里 `SYNC_SCHEDULER_ENABLED=false` 只是默认值。后台曾经保存过自动同步时，数据库 `project_sync_enabled=true` 会在启动时覆盖环境变量，调度实际开启。以启动日志中的 `effective scheduler` 为准，不要只看环境变量。
+
+已结束项目（`end_date` 早于本地当天）不创建组织、不改名、不加人。若 `project_easyai_member` 仍有 `active` 行，每一轮调度只对这些跟踪成员调用 `POST /v1/openapi/organization/{org}/users/batch/remove`，成功后把对应行标为 `removed`。没有 active 行时该步不请求平台。单个项目失败不影响同轮其他项目。手动触发：`POST /api/project-sync/ended-members/remove`，可选 JSON `{"projectId":"..."}`。
+
+EasyAI 3.30.x 中 `GET /organization/{id}` 不再返回成员，组织列表 `GET /organization` 仍返回 `users`。成员核对只用列表，不请求详情。批量加入和移除仍是 `POST /v1/openapi/organization/{org}/users/batch/add` 与 `.../batch/remove`。
 
 ## 生产部署与回滚
 
@@ -112,7 +118,8 @@ npx --yes --package @playwright/cli playwright-cli -s=dashboard-access run-code 
 | `/api/export`、`/api/export/assignments/csv` | GET | JSON/排期 CSV 导出 |
 | `/api/project-sync/:id/preview`、`/api/project-sync/:id/run` | POST | 单项目预览/执行 |
 | `/api/project-sync/global/preview`、`/api/project-sync/global/run` | POST | 全局预览/执行 |
-| `/api/project-sync/schedule` | GET/POST | 调度读取/配置 |
+| `/api/project-sync/schedule` | GET/POST | 调度读取/配置。响应含 `source`、`envEnabled`、`effectiveEnabled` |
+| `/api/project-sync/ended-members/remove` | POST | 已结束项目的跟踪成员移除，不加人、不改绑定 |
 | `/health` | GET | 非敏感健康状态 |
 
 旧 `/api/events` 原始事件流已关闭。其余绑定、请假、同步日志等接口以 `app.py` 为准。
