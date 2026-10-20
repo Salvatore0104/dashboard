@@ -185,9 +185,11 @@ class LifecycleAcceptanceTests(unittest.TestCase):
     def test_project_date_edit_updates_description(self):
         self.add_project('p-a')
         self.conn.commit()
-        response = dashboard_app.app.test_client().put('/api/projects/p-a', json={'startDate':'2026-09-22','endDate':'2026-09-29'})
+        start = date.today().isoformat()
+        end = (date.today() + timedelta(days=7)).isoformat()
+        response = dashboard_app.app.test_client().put('/api/projects/p-a', json={'startDate': start, 'endDate': end})
         self.assertEqual(response.status_code,200)
-        self.assertEqual(self.fake.organizations['org-p-a']['description'],'20260922-20260929')
+        self.assertEqual(self.fake.organizations['org-p-a']['description'], start.replace('-', '') + '-' + end.replace('-', ''))
 
     def test_archived_project_is_excluded_without_changing_members_or_organization(self):
         self.add_project("p-a")
@@ -250,6 +252,116 @@ class LifecycleAcceptanceTests(unittest.TestCase):
             with self.assertRaises(InterruptedError):
                 dashboard_app.schedule_project_sync()
         self.assertEqual([call.args[1] for call in sync.call_args_list], ['current'])
+
+    def _run_one_scheduler_round(self):
+        with patch.object(dashboard_app, "PROJECT_SYNC_SCHEDULER_ENABLED", True), \
+             patch.object(dashboard_app.project_sync_wake, "wait", side_effect=[False, InterruptedError]):
+            with self.assertRaises(InterruptedError):
+                dashboard_app.schedule_project_sync()
+
+    def test_scheduler_removes_tracked_members_the_day_after_end_and_second_run_is_noop(self):
+        self.add_project("p-ended", "Ended project")
+        self.add_person_assignment("p-ended", end=(date.today() + timedelta(days=7)).isoformat())
+        self.assertEqual(sync_project(self.conn, "p-ended")["added"], 1)
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        self.conn.execute("UPDATE projects SET end_date=? WHERE id='p-ended'", (yesterday,))
+        self.conn.commit()
+        binding_before = tuple(self.conn.execute(
+            "SELECT easyai_org_id, parent_org_id, organization_name, status, COALESCE(last_error,''), COALESCE(organization_description,'') FROM project_easyai_binding WHERE project_id='p-ended'"
+        ).fetchone())
+        self.conn.commit()
+        self.fake.calls.clear()
+        self._run_one_scheduler_round()
+        removes = [call for call in self.fake.calls if call[0] == "remove"]
+        self.assertEqual(removes, [("remove", ["easy-a"], "org-p-ended")])
+        self.assertFalse(any(call[0] in {"add", "rename", "description", "delete_org"} for call in self.fake.calls))
+        self.conn.commit()
+        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_member WHERE project_id='p-ended'").fetchone()[0], "removed")
+        binding_after = tuple(self.conn.execute(
+            "SELECT easyai_org_id, parent_org_id, organization_name, status, COALESCE(last_error,''), COALESCE(organization_description,'') FROM project_easyai_binding WHERE project_id='p-ended'"
+        ).fetchone())
+        self.assertEqual(binding_after, binding_before)
+        run = self.conn.execute("SELECT removed_count, added_count, trigger, status FROM sync_run WHERE project_id='p-ended' AND trigger='scheduler'").fetchone()
+        self.assertEqual(tuple(run), (1, 0, "scheduler", "succeeded"))
+        audit = self.conn.execute("SELECT operation, result FROM sync_audit_log WHERE project_id='p-ended' AND operation='ended_member_removal'").fetchone()
+        self.assertEqual(tuple(audit), ("ended_member_removal", "succeeded"))
+        runs_after_first = self.conn.execute("SELECT COUNT(*) FROM sync_run WHERE project_id='p-ended'").fetchone()[0]
+        self.fake.calls.clear()
+        self._run_one_scheduler_round()
+        self.assertEqual(self.fake.calls, [])
+        self.conn.commit()
+        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_member WHERE project_id='p-ended'").fetchone()[0], "removed")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM sync_run WHERE project_id='p-ended'").fetchone()[0], runs_after_first)
+
+    def test_scheduler_ended_removal_continues_after_one_project_fails(self):
+        self.add_project("p-fail")
+        self.add_project("p-ok")
+        self.add_person_assignment("p-fail", "person-a", "A")
+        self.add_person_assignment("p-ok", "person-b", "B")
+        sync_project(self.conn, "p-fail")
+        sync_project(self.conn, "p-ok")
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        self.conn.execute("UPDATE projects SET end_date=? WHERE id IN ('p-fail','p-ok')", (yesterday,))
+        self.conn.commit()
+        original = self.fake.remove_users_from_organization
+        def remove_fail_first(ids, org):
+            if org == "org-p-fail":
+                raise RuntimeError("provider down")
+            return original(ids, org)
+        self.fake.remove_users_from_organization = remove_fail_first
+        self.fake.calls.clear()
+        self._run_one_scheduler_round()
+        self.conn.commit()
+        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_member WHERE project_id='p-fail'").fetchone()[0], "active")
+        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_member WHERE project_id='p-ok'").fetchone()[0], "removed")
+        self.assertIn(("remove", ["easy-b"], "org-p-ok"), self.fake.calls)
+        self.assertEqual(self.conn.execute("SELECT status FROM sync_run WHERE project_id='p-fail' AND trigger='scheduler'").fetchone()[0], "failed")
+
+    def test_manual_ended_member_removal_is_idempotent(self):
+        self.add_project("p-manual")
+        self.add_person_assignment("p-manual")
+        sync_project(self.conn, "p-manual")
+        self.conn.execute("UPDATE projects SET end_date=? WHERE id='p-manual'", ((date.today() - timedelta(days=1)).isoformat(),))
+        self.conn.commit()
+        self.fake.calls.clear()
+        client = dashboard_app.app.test_client()
+        first = client.post("/api/project-sync/ended-members/remove", json={}).get_json()
+        self.assertTrue(first["success"], first)
+        self.assertEqual(first["removed"], 1)
+        self.assertEqual(first["added"], 0)
+        self.assertEqual([call for call in self.fake.calls if call[0] == "remove"], [("remove", ["easy-a"], "org-p-manual")])
+        self.assertFalse(any(call[0] == "add" for call in self.fake.calls))
+        self.conn.commit()
+        self.assertEqual(self.conn.execute("SELECT status FROM project_easyai_member WHERE project_id='p-manual'").fetchone()[0], "removed")
+        self.fake.calls.clear()
+        second = client.post("/api/project-sync/ended-members/remove", json={"projectId": "p-manual"}).get_json()
+        self.assertTrue(second["success"], second)
+        self.assertEqual(second["removed"], 0)
+        self.assertEqual(self.fake.calls, [])
+
+    def test_database_schedule_overrides_env_and_logs_effective_value(self):
+        previous = (dashboard_app.PROJECT_SYNC_SCHEDULER_ENABLED, dashboard_app.PROJECT_SYNC_SCHEDULER_SOURCE, dashboard_app.PROJECT_SYNC_INTERVAL_SECONDS)
+        self.addCleanup(lambda: (setattr(dashboard_app, "PROJECT_SYNC_SCHEDULER_ENABLED", previous[0]), setattr(dashboard_app, "PROJECT_SYNC_SCHEDULER_SOURCE", previous[1]), setattr(dashboard_app, "PROJECT_SYNC_INTERVAL_SECONDS", previous[2])))
+        self.conn.execute("INSERT OR REPLACE INTO config (key,value) VALUES ('project_sync_enabled','true')")
+        self.conn.execute("INSERT OR REPLACE INTO config (key,value) VALUES ('project_sync_interval_hours','3')")
+        self.conn.commit()
+        with patch.dict(os.environ, {"SYNC_SCHEDULER_ENABLED": "false"}), \
+             patch.object(dashboard_app, "PROJECT_SYNC_SCHEDULER_ENABLED", False), \
+             patch.object(dashboard_app, "PROJECT_SYNC_SCHEDULER_SOURCE", "env"), \
+             patch("builtins.print") as printed:
+            dashboard_app.load_project_schedule()
+            self.assertTrue(dashboard_app.PROJECT_SYNC_SCHEDULER_ENABLED)
+            self.assertEqual(dashboard_app.PROJECT_SYNC_SCHEDULER_SOURCE, "database")
+            self.assertEqual(dashboard_app.PROJECT_SYNC_INTERVAL_SECONDS, 10800)
+            logged = " ".join(str(call.args[0]) for call in printed.call_args_list if call.args)
+            self.assertIn("effective scheduler enabled=true", logged)
+            self.assertIn("source=database", logged)
+            self.assertIn("overrides SYNC_SCHEDULER_ENABLED=false", logged)
+            data = dashboard_app.app.test_client().get("/api/project-sync/schedule").get_json()
+        self.assertTrue(data["enabled"])
+        self.assertTrue(data["effectiveEnabled"])
+        self.assertEqual(data["source"], "database")
+        self.assertFalse(data["envEnabled"])
 
     def test_scheduler_loop_expires_members_and_continues_after_project_failure(self):
         self.add_project("p-a")
